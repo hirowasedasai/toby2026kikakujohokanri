@@ -1,0 +1,19 @@
+.DS_Store
+.env
+.env.*
+node_modules/
+coverage/
+
+# Google / clasp credentials and environment-specific identifiers
+.clasp.json
+.clasp.*.json
+.clasprc.json
+**/.clasprc.json
+
+# Real data and secrets
+credentials/
+secrets/
+data/private/
+data/raw/
+*.xlsx
+*.csv

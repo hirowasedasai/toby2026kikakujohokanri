@@ -1,0 +1,25 @@
+{
+  "name": "wasedasai-2026-day-information",
+  "version": "1.0.0",
+  "private": true,
+  "description": "早稲田祭2026 当日情報媒体 企画情報管理Apps Script",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "test": "node --test",
+    "verify": "node scripts/verify-release.mjs",
+    "select:staging": "node scripts/select-environment.mjs staging",
+    "select:production": "node scripts/select-environment.mjs production",
+    "deploy:staging": "node scripts/deploy-staging.mjs",
+    "deploy:production": "node scripts/deploy-production.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@google/clasp": "^3.3.0",
+    "eslint": "^9.32.0",
+    "globals": "^16.3.0"
+  }
+}
