@@ -95,6 +95,303 @@ function buildOutputPlan_(masterHeaders, masterRows, outputType, outputHeaders) 
   }).length };
 }
 
+function participantTrackerCell_(row, index, header) {
+  var column = index[normalizeHeader_(header)];
+  return column === undefined ? '' : row[column];
+}
+
+function setParticipantTrackerCell_(row, index, header, value) {
+  var column = index[normalizeHeader_(header)];
+  if (column !== undefined) row[column] = value;
+}
+
+function participantTrackerKeyFromRow_(row, index) {
+  return buildProvisionalKey_(
+    participantTrackerCell_(row, index, 'メールアドレス'),
+    participantTrackerCell_(row, index, '参加企画')
+  );
+}
+
+function participantResponseGroups_(inputBatches) {
+  var batch = inputBatches.find(function (candidate) {
+    return candidate.source && candidate.source.type === 'FORM';
+  });
+  if (!batch) {
+    throw makeAppError_('E_PARTICIPANT_FORM_MISSING', '参参フォーム回答を取得できません。');
+  }
+  var collected = collectInputRecords_([batch]);
+  var groups = {};
+  collected.records.forEach(function (record) {
+    var key = buildProvisionalKey_(record.email, record.participation);
+    if (!key) return;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(record);
+  });
+  return {
+    batch: batch,
+    groups: groups,
+    issues: collected.issues.slice(),
+    skipped: collected.skipped
+  };
+}
+
+function participantSuggestedStatus_(currentStatus, suggestedStatus) {
+  var current = normalizeText_(currentStatus);
+  if (current === 'キャンセル') return current;
+  if (current === '確認中' && suggestedStatus !== '確認中') return current;
+  return suggestedStatus;
+}
+
+function participantDesiredRow_(existingRow, index, response, result, currentIso) {
+  var desired = existingRow.slice();
+  var currentStatus = participantTrackerCell_(existingRow, index, '提出状況');
+  var suggestedStatus = result === '一致'
+    ? '提出済み'
+    : result === '未提出'
+      ? '未提出'
+      : '確認中';
+  setParticipantTrackerCell_(
+    desired,
+    index,
+    '提出状況',
+    participantSuggestedStatus_(currentStatus, suggestedStatus)
+  );
+  setParticipantTrackerCell_(desired, index, '参参名・フォーム回答', response ? response.organization : '');
+  setParticipantTrackerCell_(desired, index, '参参名・確定版', response ? response.organization : '');
+  setParticipantTrackerCell_(desired, index, '企画名・フォーム回答', response ? response.projectName : '');
+  setParticipantTrackerCell_(desired, index, '企画名・確定版', response ? response.projectName : '');
+  setParticipantTrackerCell_(desired, index, '照合結果', result);
+
+  var trackedHeaders = ['提出状況'].concat(
+    APP_CONFIG.participantAutomaticHeaders.filter(function (header) {
+      return header !== '最終同期日時';
+    })
+  );
+  var changed = trackedHeaders.some(function (header) {
+    return stringifyCell_(participantTrackerCell_(existingRow, index, header)) !==
+      stringifyCell_(participantTrackerCell_(desired, index, header));
+  });
+  if (changed) setParticipantTrackerCell_(desired, index, '最終同期日時', currentIso);
+  return desired;
+}
+
+function participantMatchedResult_(row, index, response) {
+  var registrationName = normalizeText_(
+    participantTrackerCell_(row, index, '参参名・参加申し込み時')
+  );
+  if (!registrationName) return '申込情報未登録';
+  return registrationName === normalizeText_(response.organization) ? '一致' : '参参名差異';
+}
+
+function changedParticipantSegments_(existingRow, desiredRow, headers) {
+  var writable = ['提出状況'].concat(APP_CONFIG.participantAutomaticHeaders).map(normalizeHeader_);
+  var writableSet = {};
+  writable.forEach(function (header) {
+    writableSet[header] = true;
+  });
+  var segments = [];
+  var current = null;
+  headers.forEach(function (header, index) {
+    var changed = writableSet[normalizeHeader_(header)] &&
+      stringifyCell_(existingRow[index]) !== stringifyCell_(desiredRow[index]);
+    if (!changed) {
+      if (current) segments.push(current);
+      current = null;
+      return;
+    }
+    if (!current) current = { startColumn: index + 1, values: [] };
+    current.values.push(desiredRow[index]);
+  });
+  if (current) segments.push(current);
+  return segments;
+}
+
+function participantIssue_(code, message, rowNumber, columnName, sourceSheet) {
+  return makeIssue_('WARN', code, message, {
+    sourceSheet: sourceSheet || APP_CONFIG.sheets.participantOutput,
+    rowNumber: rowNumber,
+    columnName: columnName
+  });
+}
+
+function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
+  var headers = trackerValues[0];
+  var index = buildHeaderIndex_(headers);
+  var responsePlan = participantResponseGroups_(inputBatches);
+  var existing = trackerValues.slice(1).map(function (row, offset) {
+    var copy = row.slice(0, headers.length);
+    while (copy.length < headers.length) copy.push('');
+    return { row: copy, rowNumber: offset + 2, key: participantTrackerKeyFromRow_(copy, index) };
+  }).filter(function (record) {
+    return !isBlankRow_(record.row);
+  });
+  var existingByKey = {};
+  existing.forEach(function (record) {
+    if (!record.key) return;
+    if (!existingByKey[record.key]) existingByKey[record.key] = [];
+    existingByKey[record.key].push(record);
+  });
+
+  var updates = [];
+  var appends = [];
+  var issues = responsePlan.issues.slice();
+  var usedResponseKeys = {};
+  var needsReview = 0;
+  var skipped = responsePlan.skipped;
+
+  function planExistingUpdate(record, response, result) {
+    var desired = participantDesiredRow_(record.row, index, response, result, currentIso);
+    var segments = changedParticipantSegments_(record.row, desired, headers);
+    if (segments.length > 0) {
+      updates.push({ rowNumber: record.rowNumber, segments: segments, row: desired });
+    } else {
+      skipped += 1;
+    }
+  }
+
+  existing.forEach(function (record) {
+    if (!record.key) {
+      planExistingUpdate(record, null, '申込情報不備');
+      needsReview += 1;
+      issues.push(participantIssue_(
+        'E_PARTICIPANT_TRACKER_ROW_INVALID',
+        '参参一覧の参加企画またはメールアドレスが空です。',
+        record.rowNumber,
+        '参加企画,メールアドレス'
+      ));
+      return;
+    }
+    if (existingByKey[record.key].length > 1) {
+      planExistingUpdate(record, null, '一覧内重複');
+      needsReview += 1;
+      issues.push(participantIssue_(
+        'E_PARTICIPANT_TRACKER_DUPLICATE',
+        '参参一覧に同じメールアドレスと参加企画の行が複数あります。',
+        record.rowNumber,
+        'メールアドレス,参加企画'
+      ));
+      return;
+    }
+    var responses = responsePlan.groups[record.key] || [];
+    if (responses.length === 0) {
+      planExistingUpdate(record, null, '未提出');
+      return;
+    }
+    usedResponseKeys[record.key] = true;
+    if (responses.length > 1) {
+      planExistingUpdate(record, null, 'フォーム回答重複');
+      needsReview += 1;
+      skipped += responses.length - 1;
+      issues.push(participantIssue_(
+        'E_PARTICIPANT_FORM_DUPLICATE',
+        '同じメールアドレスと参加企画のフォーム回答が複数あるため自動採用しません。',
+        responses[0].rowNumber,
+        'メールアドレス,参加企画',
+        responsePlan.batch.source.name
+      ));
+      return;
+    }
+    var result = participantMatchedResult_(record.row, index, responses[0]);
+    planExistingUpdate(record, responses[0], result);
+    if (result !== '一致') {
+      needsReview += 1;
+      issues.push(participantIssue_(
+        result === '参参名差異'
+          ? 'E_PARTICIPANT_NAME_MISMATCH'
+          : 'E_PARTICIPANT_REGISTRATION_MISSING',
+        result === '参参名差異'
+          ? '参加申し込み時とフォーム回答の参参名が一致しません。'
+          : 'フォーム回答に対応する参加申し込み時の参参名がありません。',
+        record.rowNumber,
+        '参参名・参加申し込み時,参参名・フォーム回答'
+      ));
+    }
+  });
+
+  Object.keys(responsePlan.groups).sort().forEach(function (key) {
+    if (usedResponseKeys[key] || existingByKey[key]) return;
+    var responses = responsePlan.groups[key];
+    var response = responses.length === 1 ? responses[0] : null;
+    var row = new Array(headers.length).fill('');
+    var first = responses[0];
+    setParticipantTrackerCell_(row, index, '参加企画', first.participation);
+    setParticipantTrackerCell_(row, index, 'メールアドレス', first.email);
+    row = participantDesiredRow_(
+      row,
+      index,
+      response,
+      response ? '申込情報未登録' : 'フォーム回答重複',
+      currentIso
+    );
+    appends.push(row);
+    needsReview += 1;
+    if (responses.length > 1) skipped += responses.length - 1;
+    issues.push(participantIssue_(
+      response ? 'E_PARTICIPANT_REGISTRATION_MISSING' : 'E_PARTICIPANT_FORM_DUPLICATE',
+      response
+        ? 'フォーム回答に対応する参加申し込み情報が参参一覧にありません。'
+        : '同じメールアドレスと参加企画のフォーム回答が複数あるため自動採用しません。',
+      first.rowNumber,
+      response ? '参参名・参加申し込み時' : 'メールアドレス,参加企画',
+      responsePlan.batch.source.name
+    ));
+  });
+
+  return {
+    updates: updates,
+    appends: appends,
+    issues: issues,
+    summary: {
+      created: appends.length,
+      updated: updates.length,
+      skipped: skipped,
+      needsReview: needsReview,
+      errors: issues.length
+    }
+  };
+}
+
+function applyParticipantTrackerDelta_(sheet, delta, width) {
+  delta.updates.forEach(function (update) {
+    update.segments.forEach(function (segment) {
+      sheet.getRange(update.rowNumber, segment.startColumn, 1, segment.values.length)
+        .setValues([segment.values]);
+    });
+  });
+  if (delta.appends.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, delta.appends.length, width)
+      .setValues(delta.appends);
+  }
+}
+
+function performBuildParticipantTracker_(suppliedPreflight, executionId) {
+  var preflight = suppliedPreflight || preflightInternal_({
+    inputs: true,
+    master: false,
+    outputs: true,
+    log: true
+  });
+  var plan = planParticipantTrackerDelta_(
+    preflight.participantOutput.values,
+    preflight.inputs,
+    nowIso_()
+  );
+  applyParticipantTrackerDelta_(
+    preflight.participantOutput.sheet,
+    plan,
+    preflight.participantOutput.values[0].length
+  );
+  plan.summary.executionId = executionId;
+  appendProcessLog_(
+    preflight,
+    executionId,
+    'syncDelta:participantTracker',
+    plan.summary,
+    plan.issues
+  );
+  return plan.summary;
+}
+
 function replaceOutputData_(sheet, rows, width) {
   var previousDataRows = Math.max(sheet.getLastRow() - 1, 0);
   if (rows.length === 0 && previousDataRows > 0) {
@@ -113,6 +410,9 @@ function replaceOutputData_(sheet, rows, width) {
 }
 
 function performBuildOutput_(outputType, suppliedPreflight, executionId) {
+  if (outputType === 'participant') {
+    return performBuildParticipantTracker_(suppliedPreflight, executionId);
+  }
   var preflight = suppliedPreflight || preflightInternal_({
     inputs: false,
     master: true,

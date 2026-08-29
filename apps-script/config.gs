@@ -64,6 +64,18 @@ var APP_CONFIG = Object.freeze({
     '要確認理由'
   ]),
   participantOutputHeaders: Object.freeze([
+    '参加企画',
+    '提出状況',
+    'メールアドレス',
+    '参参名・参加申し込み時',
+    '参参名・フォーム回答',
+    '参参名・確定版',
+    '企画名・フォーム回答',
+    '企画名・確定版',
+    '照合結果',
+    '最終同期日時'
+  ]),
+  previousParticipantOutputHeaders: Object.freeze([
     '管理ID',
     '参加企画',
     '所属局',
@@ -73,6 +85,37 @@ var APP_CONFIG = Object.freeze({
     '画像リンク',
     '最終更新日時'
   ]),
+  participantBaselineHeaders: Object.freeze([
+    '参加企画',
+    'メールアドレス',
+    '参参名・参加申し込み時'
+  ]),
+  participantAutomaticHeaders: Object.freeze([
+    '参参名・フォーム回答',
+    '参参名・確定版',
+    '企画名・フォーム回答',
+    '企画名・確定版',
+    '照合結果',
+    '最終同期日時'
+  ]),
+  participantStatusOptions: Object.freeze([
+    '提出済み',
+    '確認中',
+    '未提出',
+    'キャンセル'
+  ]),
+  participantColumnWidths: Object.freeze({
+    '参加企画': 210,
+    '提出状況': 120,
+    'メールアドレス': 190,
+    '参参名・参加申し込み時': 300,
+    '参参名・フォーム回答': 300,
+    '参参名・確定版': 300,
+    '企画名・フォーム回答': 300,
+    '企画名・確定版': 300,
+    '照合結果': 150,
+    '最終同期日時': 165
+  }),
   foodOutputHeaders: Object.freeze([
     '管理ID',
     '参加企画',

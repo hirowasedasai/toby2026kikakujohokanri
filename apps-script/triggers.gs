@@ -47,11 +47,20 @@ function uninstallTriggers() {
   );
 }
 
-function runTriggeredSync_(operation, includeBureauOutputs) {
+function runTriggeredSync_(operation, includeBureauOutputs, includeParticipantOutput) {
   var executionId = newExecutionId_();
   try {
     return withScriptLock_(function () {
-      var syncSummary = performSyncMaster_(false, null, executionId);
+      var preflight = preflightInternal_({
+        inputs: true,
+        master: true,
+        outputs: includeParticipantOutput,
+        log: true
+      });
+      var syncSummary = performSyncMaster_(false, preflight, executionId);
+      if (includeParticipantOutput) {
+        performBuildParticipantTracker_(preflight, executionId);
+      }
       if (includeBureauOutputs) performBuildBureauOutputs_(null, executionId);
       return syncSummary;
     });
@@ -84,11 +93,15 @@ function handleFormSubmit_(event) {
     return;
   }
   if (source.syncToMaster === false) return;
-  runTriggeredSync_('trigger:formSubmit', source.type === 'STAFF_FORM');
+  runTriggeredSync_(
+    'trigger:formSubmit',
+    source.type === 'STAFF_FORM',
+    source.type === 'FORM'
+  );
 }
 
 function scheduledSyncMaster_() {
   var settings = getScriptSettings_();
   if (!settings.scheduledSyncEnabled) return;
-  runTriggeredSync_('trigger:scheduledSync', true);
+  runTriggeredSync_('trigger:scheduledSync', true, true);
 }

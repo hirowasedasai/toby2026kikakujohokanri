@@ -38,7 +38,8 @@ for (const file of [
   'logger.gs',
   'syncMaster.gs',
   'buildOutputs.gs',
-  'buildBureauOutputs.gs'
+  'buildBureauOutputs.gs',
+  'setup.gs'
 ]) {
   const source = await readFile(path.join(repoRoot, 'apps-script', file), 'utf8');
   vm.runInContext(source, context, { filename: file });
@@ -218,9 +219,6 @@ test('運スタ企画フォームを通常入力として部署名と固定参�
   assert.equal(masterValue(result.rows[0], '団体名'), '合成部署');
   assert.equal(masterValue(result.rows[0], '企画名'), '合成企画');
 
-  const output = context.buildOutputPlan_(masterHeaders, result.rows, 'participant');
-  const bureauIndex = plain(context.APP_CONFIG.participantOutputHeaders).indexOf('所属局');
-  assert.equal(output.rows[0][bureauIndex], '企画局');
 });
 
 test('参参フォームの実ヘッダーを列番号に依存せず解決する', () => {
@@ -262,6 +260,175 @@ test('参参フォームの実ヘッダーを列番号に依存せず解決す�
   assert.equal(collected.records[1].projectName, '飲食企画');
   assert.equal(collected.records[1].salesItems, '合成販売物');
   assert.equal(collected.records[1].imageLink, '飲食画像');
+});
+
+test('参参一覧はメールと参加企画でフォーム回答を照合して差分更新する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const existing = new Array(headers.length).fill('');
+  existing[headers.indexOf('参加企画')] = '教室企画';
+  existing[headers.indexOf('提出状況')] = '未提出';
+  existing[headers.indexOf('メールアドレス')] = 'participant@example.com';
+  existing[headers.indexOf('参参名・参加申し込み時')] = '合成参加団体';
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [['participant@example.com', '教室企画', '合成参加団体', '合成企画']]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, existing],
+    [batch],
+    'TIME'
+  ));
+  const updated = delta.updates[0].row;
+
+  assert.equal(delta.summary.created, 0);
+  assert.equal(delta.summary.updated, 1);
+  assert.equal(delta.summary.needsReview, 0);
+  assert.equal(updated[headers.indexOf('参加企画')], '教室企画');
+  assert.equal(updated[headers.indexOf('メールアドレス')], 'participant@example.com');
+  assert.equal(updated[headers.indexOf('参参名・参加申し込み時')], '合成参加団体');
+  assert.equal(updated[headers.indexOf('提出状況')], '提出済み');
+  assert.equal(updated[headers.indexOf('参参名・フォーム回答')], '合成参加団体');
+  assert.equal(updated[headers.indexOf('参参名・確定版')], '合成参加団体');
+  assert.equal(updated[headers.indexOf('企画名・確定版')], '合成企画');
+  assert.equal(updated[headers.indexOf('照合結果')], '一致');
+  assert.equal(updated[headers.indexOf('最終同期日時')], 'TIME');
+  const changedColumns = delta.updates[0].segments.flatMap((segment) =>
+    segment.values.map((_, offset) => segment.startColumn + offset)
+  );
+  ['参加企画', 'メールアドレス', '参参名・参加申し込み時'].forEach((header) => {
+    assert.equal(changedColumns.includes(headers.indexOf(header) + 1), false);
+  });
+});
+
+test('参参一覧の同一内容再同期は更新せず、人が付けた状態を保持する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const existing = new Array(headers.length).fill('');
+  existing[headers.indexOf('参加企画')] = '教室企画';
+  existing[headers.indexOf('提出状況')] = 'キャンセル';
+  existing[headers.indexOf('メールアドレス')] = 'cancelled@example.com';
+  existing[headers.indexOf('参参名・参加申し込み時')] = '合成参加団体';
+  existing[headers.indexOf('参参名・フォーム回答')] = '合成参加団体';
+  existing[headers.indexOf('参参名・確定版')] = '合成参加団体';
+  existing[headers.indexOf('企画名・フォーム回答')] = '合成企画';
+  existing[headers.indexOf('企画名・確定版')] = '合成企画';
+  existing[headers.indexOf('照合結果')] = '一致';
+  existing[headers.indexOf('最終同期日時')] = 'OLD-TIME';
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [['cancelled@example.com', '教室企画', '合成参加団体', '合成企画']]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, existing],
+    [batch],
+    'NEW-TIME'
+  ));
+
+  assert.equal(delta.summary.updated, 0);
+  assert.equal(delta.summary.skipped, 1);
+  assert.equal(delta.updates.length, 0);
+});
+
+test('参参名の差異と申込情報のない回答を自動採用せず確認中にする', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const existing = new Array(headers.length).fill('');
+  existing[headers.indexOf('参加企画')] = '教室企画';
+  existing[headers.indexOf('メールアドレス')] = 'mismatch@example.com';
+  existing[headers.indexOf('参参名・参加申し込み時')] = '申込時名称';
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['mismatch@example.com', '教室企画', '回答時名称', '差異企画'],
+      ['new@example.com', 'ステージ企画', '新規回答団体', '新規回答企画']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, existing],
+    [batch],
+    'TIME'
+  ));
+  const updated = delta.updates[0].row;
+  const appended = delta.appends[0];
+
+  assert.equal(delta.summary.created, 1);
+  assert.equal(delta.summary.updated, 1);
+  assert.equal(delta.summary.needsReview, 2);
+  assert.equal(updated[headers.indexOf('提出状況')], '確認中');
+  assert.equal(updated[headers.indexOf('照合結果')], '参参名差異');
+  assert.equal(appended[headers.indexOf('参加企画')], 'ステージ企画');
+  assert.equal(appended[headers.indexOf('メールアドレス')], 'new@example.com');
+  assert.equal(appended[headers.indexOf('参参名・参加申し込み時')], '');
+  assert.equal(appended[headers.indexOf('提出状況')], '確認中');
+  assert.equal(appended[headers.indexOf('照合結果')], '申込情報未登録');
+  assert.deepEqual(
+    delta.issues.map((issue) => issue.code),
+    ['E_PARTICIPANT_NAME_MISMATCH', 'E_PARTICIPANT_REGISTRATION_MISSING']
+  );
+});
+
+test('参参一覧は未提出行を保持し、重複回答を一意に決めない', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const unsubmitted = new Array(headers.length).fill('');
+  unsubmitted[headers.indexOf('参加企画')] = '教室企画';
+  unsubmitted[headers.indexOf('メールアドレス')] = 'waiting@example.com';
+  unsubmitted[headers.indexOf('参参名・参加申し込み時')] = '未提出団体';
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['duplicate@example.com', '教室企画', '重複団体A', '重複企画A'],
+      ['duplicate@example.com', '教室企画', '重複団体B', '重複企画B']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, unsubmitted],
+    [batch],
+    'TIME'
+  ));
+  const waiting = delta.updates[0].row;
+  const duplicate = delta.appends[0];
+
+  assert.equal(waiting[headers.indexOf('提出状況')], '未提出');
+  assert.equal(waiting[headers.indexOf('照合結果')], '未提出');
+  assert.equal(duplicate[headers.indexOf('提出状況')], '確認中');
+  assert.equal(duplicate[headers.indexOf('参参名・フォーム回答')], '');
+  assert.equal(duplicate[headers.indexOf('企画名・フォーム回答')], '');
+  assert.equal(duplicate[headers.indexOf('照合結果')], 'フォーム回答重複');
+  assert.equal(delta.summary.needsReview, 1);
+  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
+});
+
+test('旧参参一覧はマスターからメールを補って提出管理形式へ移行する', () => {
+  const oldHeaders = plain(context.APP_CONFIG.previousParticipantOutputHeaders);
+  const oldRow = oldHeaders.map((header) => ({
+    管理ID: 'TMP-SYNTHETIC',
+    参加企画: '教室企画',
+    団体名: '移行団体',
+    企画名: '移行企画',
+    最終更新日時: 'OLD-TIME'
+  })[header] || '');
+  const masterRow = masterHeaders.map((header) => ({
+    管理ID: 'TMP-SYNTHETIC',
+    メールアドレス: 'migration@example.com',
+    参加企画: '教室企画',
+    団体名: '移行団体',
+    企画名: '移行企画',
+    データソース: '26参参フォーム回答'
+  })[header] || '');
+  const migrated = plain(context.migratePreviousParticipantRows_(
+    [oldHeaders, oldRow],
+    [masterHeaders, masterRow]
+  ));
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+
+  assert.equal(migrated.length, 1);
+  assert.equal(migrated[0][headers.indexOf('参加企画')], '教室企画');
+  assert.equal(migrated[0][headers.indexOf('メールアドレス')], 'migration@example.com');
+  assert.equal(migrated[0][headers.indexOf('参参名・フォーム回答')], '移行団体');
+  assert.equal(migrated[0][headers.indexOf('企画名・確定版')], '移行企画');
+  assert.equal(migrated[0][headers.indexOf('照合結果')], '申込情報未登録');
 });
 
 test('変更申請2タブは自由記述をマスターへ自動反映しない', () => {
