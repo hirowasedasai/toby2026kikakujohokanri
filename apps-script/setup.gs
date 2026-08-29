@@ -14,29 +14,24 @@ function ensureBureauSchemaSheet_(spreadsheet, sheetName) {
   var sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) sheet = spreadsheet.insertSheet(sheetName);
   var values = readSheetValues_(sheet);
-  var schemaChanged = false;
   if (values.length === 0 || isBlankRow_(values[0])) {
     writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
-    schemaChanged = true;
   } else if (
     headerSetMatches_(values[0], APP_CONFIG.bureauOutputHeaders) &&
     !headerOrderMatches_(values[0], APP_CONFIG.bureauOutputHeaders)
   ) {
     migrateBureauSheet_(sheet, values);
-    schemaChanged = true;
   } else if (headerSetMatches_(values[0], APP_CONFIG.previousBureauOutputHeaders)) {
     migrateBureauSheet_(sheet, values);
-    schemaChanged = true;
   } else if (headerSetMatches_(values[0], APP_CONFIG.legacyBureauOutputHeaders)) {
     writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
-    schemaChanged = true;
   }
   var validation = validateExactHeaders_(
     sheet,
     APP_CONFIG.bureauOutputHeaders,
     'E_EXISTING_SCHEMA_MISMATCH'
   );
-  if (schemaChanged) applyBureauCheckValidation_(sheet, validation.headerIndex);
+  applyBureauSheetPresentation_(sheet, validation.headerIndex);
 }
 
 function setupSchemaInternal_() {

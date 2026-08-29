@@ -497,17 +497,56 @@ function migrateBureauSheet_(sheet, values) {
   sheet.setFrozenRows(1);
 }
 
-function applyBureauCheckValidation_(sheet, headerIndex) {
-  var rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['未確認', '確認中', '確認済み', '修正必要'], true)
+function buildBureauListValidation_(values) {
+  return SpreadsheetApp.newDataValidation()
+    .requireValueInList(values, true)
     .setAllowInvalid(false)
     .build();
+}
+
+function applyBureauListValidation_(sheet, headerIndex, header, values) {
+  var column = headerIndex[normalizeHeader_(header)];
+  if (column === undefined) return;
+  var dataRowCount = sheet.getMaxRows() - 1;
+  if (dataRowCount < 1) return;
+  sheet.getRange(2, column + 1, dataRowCount, 1)
+    .setDataValidation(buildBureauListValidation_(values));
+}
+
+function applyBureauSheetPresentation_(sheet, headerIndex) {
+  var dataRowCount = sheet.getMaxRows() - 1;
+  if (dataRowCount > 0 && sheet.getMaxColumns() > 0) {
+    sheet.getRange(2, 1, dataRowCount, sheet.getMaxColumns()).clearDataValidations();
+  }
+  applyBureauListValidation_(
+    sheet,
+    headerIndex,
+    '掲載媒体',
+    APP_CONFIG.bureauPublicationMediaOptions
+  );
   ['当媒チェック', '校閲チェック'].forEach(function (header) {
+    applyBureauListValidation_(
+      sheet,
+      headerIndex,
+      header,
+      APP_CONFIG.bureauCheckStatusOptions
+    );
+  });
+
+  sheet.setFrozenRows(1);
+  var frozenThroughColumn = headerIndex[normalizeHeader_(APP_CONFIG.bureauFrozenThroughHeader)];
+  if (frozenThroughColumn !== undefined) sheet.setFrozenColumns(frozenThroughColumn + 1);
+  Object.keys(APP_CONFIG.bureauColumnWidths).forEach(function (header) {
     var column = headerIndex[normalizeHeader_(header)];
     if (column === undefined) return;
-    sheet.getRange(2, column + 1, Math.max(sheet.getMaxRows() - 1, 1), 1)
-      .setDataValidation(rule);
+    sheet.setColumnWidth(column + 1, APP_CONFIG.bureauColumnWidths[header]);
   });
+}
+
+function bureauSheetPresentationNeedsRepair_(sheet, headerIndex, schemaChanged) {
+  if (schemaChanged || sheet.getFrozenRows() !== 1) return true;
+  var frozenThroughColumn = headerIndex[normalizeHeader_(APP_CONFIG.bureauFrozenThroughHeader)];
+  return frozenThroughColumn !== undefined && sheet.getFrozenColumns() !== frozenThroughColumn + 1;
 }
 
 function prepareBureauOutputSheets_(spreadsheet) {
@@ -537,7 +576,9 @@ function prepareBureauOutputSheets_(spreadsheet) {
       'E_BUREAU_OUTPUT_HEADER_MISSING'
     );
     validation.bureau = output.bureau;
-    if (schemaChanged) applyBureauCheckValidation_(sheet, validation.headerIndex);
+    if (bureauSheetPresentationNeedsRepair_(sheet, validation.headerIndex, schemaChanged)) {
+      applyBureauSheetPresentation_(sheet, validation.headerIndex);
+    }
     return validation;
   });
 }

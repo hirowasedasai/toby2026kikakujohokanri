@@ -105,6 +105,38 @@ var APP_CONFIG = Object.freeze({
     '当媒チェック',
     '校閲チェック'
   ]),
+  bureauPublicationMediaOptions: Object.freeze([
+    'パンフレット',
+    'Webサイト',
+    'パンフ／Web'
+  ]),
+  bureauCheckStatusOptions: Object.freeze([
+    '未確認',
+    '確認中',
+    '確認済み',
+    '修正必要'
+  ]),
+  bureauFrozenThroughHeader: '掲載媒体',
+  bureauColumnWidths: Object.freeze({
+    'ページ名': 170,
+    '内部向け企画・取り組み名': 175,
+    '企画名': 170,
+    '掲載文字情報': 120,
+    '担当者名': 90,
+    '部署名': 110,
+    '掲載媒体': 125,
+    '当媒チェック': 100,
+    '校閲チェック': 100,
+    '変更反映状況': 120,
+    '企画日時': 100,
+    '企画場所': 120,
+    '企画紹介文': 260,
+    '企画ジャンル': 120,
+    '整理券情報': 200,
+    'ゲスト情報': 200,
+    '備考': 200,
+    '最終変更申請日時': 150
+  }),
   bureauOutputHeaders: Object.freeze([
     'ページ名',
     '内部向け企画・取り組み名',

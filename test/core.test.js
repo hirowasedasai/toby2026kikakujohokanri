@@ -502,6 +502,98 @@ test('局別18列は前年の業務順に並び、旧順序から値を保持し
   assert.deepEqual(migrated[0], current.map((header) => valuesByHeader[header]));
 });
 
+test('局別タブの入力規則と固定列を現在のヘッダー名から設定する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const headerIndex = context.buildHeaderIndex_(headers);
+  const operations = {
+    cleared: [],
+    validations: [],
+    widths: [],
+    frozenRows: 0,
+    frozenColumns: 0
+  };
+  context.SpreadsheetApp = {
+    newDataValidation() {
+      const definition = { values: [], showDropdown: false, allowInvalid: true };
+      return {
+        requireValueInList(values, showDropdown) {
+          definition.values = plain(values);
+          definition.showDropdown = showDropdown;
+          return this;
+        },
+        setAllowInvalid(value) {
+          definition.allowInvalid = value;
+          return this;
+        },
+        build() {
+          return { ...definition };
+        }
+      };
+    }
+  };
+  const sheet = {
+    getMaxRows: () => 1000,
+    getMaxColumns: () => 26,
+    getRange(row, column, rowCount, columnCount) {
+      return {
+        clearDataValidations() {
+          operations.cleared.push({ row, column, rowCount, columnCount });
+        },
+        setDataValidation(rule) {
+          operations.validations.push({ row, column, rowCount, columnCount, rule });
+        }
+      };
+    },
+    setFrozenRows(value) {
+      operations.frozenRows = value;
+    },
+    setFrozenColumns(value) {
+      operations.frozenColumns = value;
+    },
+    setColumnWidth(column, width) {
+      operations.widths.push({ column, width });
+    }
+  };
+
+  context.applyBureauSheetPresentation_(sheet, headerIndex);
+
+  assert.deepEqual(operations.cleared, [
+    { row: 2, column: 1, rowCount: 999, columnCount: 26 }
+  ]);
+  assert.deepEqual(
+    operations.validations.map((entry) => ({
+      header: headers[entry.column - 1],
+      values: entry.rule.values,
+      allowInvalid: entry.rule.allowInvalid
+    })),
+    [
+      {
+        header: '掲載媒体',
+        values: ['パンフレット', 'Webサイト', 'パンフ／Web'],
+        allowInvalid: false
+      },
+      {
+        header: '当媒チェック',
+        values: ['未確認', '確認中', '確認済み', '修正必要'],
+        allowInvalid: false
+      },
+      {
+        header: '校閲チェック',
+        values: ['未確認', '確認中', '確認済み', '修正必要'],
+        allowInvalid: false
+      }
+    ]
+  );
+  assert.equal(operations.validations.some((entry) => ['整理券情報', 'ゲスト情報'].includes(headers[entry.column - 1])), false);
+  assert.equal(operations.frozenRows, 1);
+  assert.equal(operations.frozenColumns, headers.indexOf('掲載媒体') + 1);
+  assert.equal(operations.widths.length, headers.length);
+  assert.equal(
+    operations.widths.find((entry) => headers[entry.column - 1] === '企画紹介文').width,
+    260
+  );
+});
+
 test('差分更新は手動列を保持し、原典変更時だけ確認状態を戻す', () => {
   const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
   const oldRecord = makeBureauRecord({ introduction: '旧原典' });
