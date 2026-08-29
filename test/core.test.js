@@ -67,6 +67,86 @@ function masterValue(row, header) {
   return row[index[context.normalizeHeader_(header)]];
 }
 
+function makeBureauOutputState(bureau, rows = []) {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  return {
+    bureau,
+    values: [headers, ...rows],
+    sheet: { getName: () => `26${bureau}` }
+  };
+}
+
+function makeBureauRecord(overrides = {}) {
+  return {
+    timestamp: 'TIME',
+    bureau: '企画局',
+    department: '部署',
+    projectName: '差分企画',
+    staffName: '担当者',
+    introduction: '原典',
+    place: '場所',
+    scheduleOverride: '日時',
+    genres: '',
+    mainGenre: '',
+    ticketDistribution: '',
+    ticketDetails: '',
+    guest: '',
+    guestName: '',
+    guestKana: '',
+    guestTitle: '',
+    guestPublication: '',
+    notes: '',
+    beforeChange: '',
+    beforeImage: '',
+    afterChange: '',
+    afterImage: '',
+    sourceSheet: '26運スタ企画フォーム回答',
+    sourceType: 'STAFF_FORM',
+    rowNumber: 2,
+    changeStatus: '変更なし',
+    lastChangeAt: '',
+    matchProjectKeys: ['差分企画'],
+    ...overrides
+  };
+}
+
+function makeGridSheet(initialValues) {
+  const grid = initialValues.map((row) => row.slice());
+  return {
+    grid,
+    tabColor: null,
+    getLastRow() {
+      return grid.length;
+    },
+    getLastColumn() {
+      return grid.reduce((width, row) => Math.max(width, row.length), 0);
+    },
+    getRange(row, column, rowCount = 1, columnCount = 1) {
+      return {
+        getValues() {
+          return Array.from({ length: rowCount }, (_, rowOffset) =>
+            Array.from({ length: columnCount }, (_, columnOffset) =>
+              grid[row - 1 + rowOffset]?.[column - 1 + columnOffset] ?? ''
+            )
+          );
+        },
+        setValues(values) {
+          values.forEach((sourceRow, rowOffset) => {
+            const targetRowIndex = row - 1 + rowOffset;
+            while (grid.length <= targetRowIndex) grid.push([]);
+            sourceRow.forEach((value, columnOffset) => {
+              grid[targetRowIndex][column - 1 + columnOffset] = value;
+            });
+          });
+        }
+      };
+    },
+    setTabColor(value) {
+      this.tabColor = value;
+    }
+  };
+}
+
 test('ヘッダー順変更と表記ゆれを候補名から解決する', () => {
   const batch = makeBatch(fixture.standard.headers, fixture.standard.rows);
   assert.equal(batch.columns.email, 3);
@@ -350,6 +430,100 @@ test('同じ企画名の通常回答が複数ある変更申請は自動反映�
   );
 });
 
+test('旧12列から手動6列を初期化して18列へ移行する', () => {
+  const previousHeaders = plain(context.APP_CONFIG.previousBureauOutputHeaders);
+  const previousRow = previousHeaders.map((header) => ({
+    企画名: '移行企画',
+    企画紹介文: '原典文章',
+    担当者名: '担当者'
+  })[header] || '');
+  const migrated = context.migratePreviousBureauRows_([previousHeaders, previousRow]);
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+
+  assert.equal(migrated.length, 1);
+  assert.equal(migrated[0][headers.indexOf('内部向け企画・取り組み名')], '移行企画');
+  assert.equal(migrated[0][headers.indexOf('掲載文字情報')], '原典文章');
+  assert.equal(migrated[0][headers.indexOf('当媒チェック')], '未確認');
+  assert.equal(migrated[0][headers.indexOf('校閲チェック')], '未確認');
+});
+
+test('差分更新は手動列を保持し、原典変更時だけ確認状態を戻す', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const oldRecord = makeBureauRecord({ introduction: '旧原典' });
+  const existingRow = plain(context.mergeBureauRecordWithManualRow_(oldRecord, null, null, headers));
+  existingRow[headers.indexOf('掲載文字情報')] = '編集済み掲載文';
+  existingRow[headers.indexOf('ページ名')] = '企画紹介ページ';
+  existingRow[headers.indexOf('掲載媒体')] = 'Web';
+  existingRow[headers.indexOf('当媒チェック')] = '確認済み';
+  existingRow[headers.indexOf('校閲チェック')] = '確認済み';
+  const output = makeBureauOutputState('企画局', [existingRow]);
+  const newRecord = makeBureauRecord({ introduction: '新原典' });
+  const delta = context.planBureauDelta_([output], [newRecord]);
+  const updatedRow = plain(delta.updates[0].row);
+
+  assert.equal(delta.created, 0);
+  assert.equal(delta.updated, 1);
+  assert.equal(delta.deletes.length, 0);
+  assert.equal(updatedRow[headers.indexOf('企画紹介文')], '新原典');
+  assert.equal(updatedRow[headers.indexOf('掲載文字情報')], '編集済み掲載文');
+  assert.equal(updatedRow[headers.indexOf('ページ名')], '企画紹介ページ');
+  assert.equal(updatedRow[headers.indexOf('掲載媒体')], 'Web');
+  assert.equal(updatedRow[headers.indexOf('当媒チェック')], '未確認');
+  assert.equal(updatedRow[headers.indexOf('校閲チェック')], '未確認');
+  const changedColumns = plain(delta.updates[0].segments).flatMap((segment) =>
+    segment.values.map((_, offset) => segment.startColumn + offset)
+  );
+  assert.equal(changedColumns.includes(headers.indexOf('掲載文字情報') + 1), false);
+  assert.equal(changedColumns.includes(headers.indexOf('ページ名') + 1), false);
+  assert.equal(changedColumns.includes(headers.indexOf('掲載媒体') + 1), false);
+  assert.equal(changedColumns.includes(headers.indexOf('企画紹介文') + 1), true);
+});
+
+test('変更申請から掲載文字情報を自動上書きしない', () => {
+  const parsed = context.parseStructuredChange_('掲載文字情報：「自動上書きしない文章」');
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.reason, /未対応/);
+});
+
+test('所属局の差分更新は手動列を保持して移動し、元行だけを削除対象にする', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const oldRecord = makeBureauRecord();
+  const existingRow = plain(context.mergeBureauRecordWithManualRow_(oldRecord, null, null, headers));
+  existingRow[headers.indexOf('内部向け企画・取り組み名')] = '内部名称';
+  existingRow[headers.indexOf('掲載文字情報')] = '掲載文';
+  existingRow[headers.indexOf('ページ名')] = 'ページ';
+  const sourceOutput = makeBureauOutputState('企画局', [existingRow]);
+  const targetOutput = makeBureauOutputState('開発局');
+  const movedRecord = makeBureauRecord({ bureau: '開発局' });
+  const delta = context.planBureauDelta_([sourceOutput, targetOutput], [movedRecord]);
+  const movedRow = plain(delta.appends[0].row);
+
+  assert.equal(delta.created, 0);
+  assert.equal(delta.updated, 1);
+  assert.equal(delta.deletes.length, 1);
+  assert.equal(delta.deletes[0].rowNumber, 2);
+  assert.equal(movedRow[headers.indexOf('内部向け企画・取り組み名')], '内部名称');
+  assert.equal(movedRow[headers.indexOf('掲載文字情報')], '掲載文');
+  assert.equal(movedRow[headers.indexOf('ページ名')], 'ページ');
+});
+
+test('入力と照合できない既存行は削除せず要手動確認へ残す', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const orphanRow = plain(context.mergeBureauRecordWithManualRow_(
+    makeBureauRecord({ projectName: '孤立企画', matchProjectKeys: ['孤立企画'] }),
+    null,
+    null,
+    headers
+  ));
+  const delta = context.planBureauDelta_([makeBureauOutputState('企画局', [orphanRow])], []);
+
+  assert.equal(delta.deletes.length, 0);
+  assert.equal(delta.updates.length, 0);
+  assert.equal(delta.appends.length, 0);
+  assert.equal(delta.reviews.length, 1);
+  assert.equal(delta.issues[0].code, 'E_BUREAU_ORPHAN_PRESERVED');
+});
+
 test('要手動確認は対応済みを除いて未対応件数を数える', () => {
   const headers = plain(context.APP_CONFIG.manualReviewHeaders);
   const statusIndex = headers.indexOf('対応状況');
@@ -360,6 +534,59 @@ test('要手動確認は対応済みを除いて未対応件数を数える', ()
   resolved[0] = 'source:3';
   resolved[statusIndex] = '対応済み';
   assert.equal(context.pendingManualReviewCountFromValues_([headers, pending, resolved]), 1);
+});
+
+test('要手動確認も差分更新し、対応状況と過去行を保持する', () => {
+  const headers = plain(context.APP_CONFIG.manualReviewHeaders);
+  const existing = new Array(headers.length).fill('');
+  existing[headers.indexOf('確認キー')] = 'source:2';
+  existing[headers.indexOf('要確認理由')] = '旧理由';
+  existing[headers.indexOf('対応状況')] = '対応済み';
+  const historical = new Array(headers.length).fill('');
+  historical[headers.indexOf('確認キー')] = 'source:1';
+  historical[headers.indexOf('対応状況')] = '対応済み';
+  const sheet = makeGridSheet([headers, existing, historical]);
+  const reviewSheet = { sheet, values: sheet.grid };
+
+  const pending = context.syncManualReviewData_(reviewSheet, [
+    {
+      reviewKey: 'source:2',
+      timestamp: 'TIME',
+      bureau: '企画局',
+      department: '部署',
+      projectName: '企画',
+      staffName: '担当者',
+      reason: '新理由',
+      beforeChange: '',
+      afterChange: '',
+      beforeImage: '',
+      afterImage: '',
+      sourceSheet: 'source',
+      rowNumber: 2
+    },
+    {
+      reviewKey: 'source:3',
+      timestamp: 'TIME',
+      bureau: '企画局',
+      department: '部署',
+      projectName: '新規企画',
+      staffName: '担当者',
+      reason: '新規理由',
+      beforeChange: '',
+      afterChange: '',
+      beforeImage: '',
+      afterImage: '',
+      sourceSheet: 'source',
+      rowNumber: 3
+    }
+  ]);
+
+  assert.equal(sheet.grid[1][headers.indexOf('要確認理由')], '新理由');
+  assert.equal(sheet.grid[1][headers.indexOf('対応状況')], '対応済み');
+  assert.equal(sheet.grid[2][headers.indexOf('確認キー')], 'source:1');
+  assert.equal(sheet.grid[3][headers.indexOf('確認キー')], 'source:3');
+  assert.equal(sheet.grid[3][headers.indexOf('対応状況')], '未対応');
+  assert.equal(pending, 1);
 });
 
 test('局別タブは9選択肢に対応し、不明な所属局の行だけをスキップする', () => {

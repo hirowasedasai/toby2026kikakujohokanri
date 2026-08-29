@@ -80,7 +80,7 @@ function handleFormSubmit_(event) {
   });
   if (!source) return;
   if (source.type === 'STAFF_CHANGE') {
-    runTriggeredBureauOutputs_('trigger:staffChangeBureauOutput');
+    runTriggeredBureauOutputs_('trigger:staffChangeBureauDelta');
     return;
   }
   if (source.syncToMaster === false) return;

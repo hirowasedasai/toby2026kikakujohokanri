@@ -14,15 +14,23 @@ function ensureBureauSchemaSheet_(spreadsheet, sheetName) {
   var sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) sheet = spreadsheet.insertSheet(sheetName);
   var values = readSheetValues_(sheet);
-  if (
-    values.length === 0 ||
-    isBlankRow_(values[0]) ||
-    headerSetMatches_(values[0], APP_CONFIG.legacyBureauOutputHeaders)
-  ) {
+  var schemaChanged = false;
+  if (values.length === 0 || isBlankRow_(values[0])) {
     writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
-    return;
+    schemaChanged = true;
+  } else if (headerSetMatches_(values[0], APP_CONFIG.previousBureauOutputHeaders)) {
+    migrateBureauSheet_(sheet, values);
+    schemaChanged = true;
+  } else if (headerSetMatches_(values[0], APP_CONFIG.legacyBureauOutputHeaders)) {
+    writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
+    schemaChanged = true;
   }
-  validateExactHeaders_(sheet, APP_CONFIG.bureauOutputHeaders, 'E_EXISTING_SCHEMA_MISMATCH');
+  var validation = validateExactHeaders_(
+    sheet,
+    APP_CONFIG.bureauOutputHeaders,
+    'E_EXISTING_SCHEMA_MISMATCH'
+  );
+  if (schemaChanged) applyBureauCheckValidation_(sheet, validation.headerIndex);
 }
 
 function setupSchemaInternal_() {

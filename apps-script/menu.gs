@@ -7,7 +7,7 @@ function onOpen() {
     .addItem('フォーム回答を同期', 'syncMaster')
     .addItem('参参一覧を更新', 'buildParticipantList')
     .addItem('屋台情報まとめを更新', 'buildFoodStallSummary')
-    .addItem('局別タブを更新', 'buildBureauOutputs')
+    .addItem('局別タブを差分同期', 'buildBureauOutputs')
     .addItem('全処理を実行', 'runAll')
     .addSeparator()
     .addItem('要手動確認を開く', 'openManualReview')
@@ -25,7 +25,7 @@ function runAll() {
         inputs: true,
         master: true,
         outputs: true,
-        bureaus: true,
+        bureaus: false,
         log: true
       });
       var syncSummary = performSyncMaster_(false, preflight, executionId);

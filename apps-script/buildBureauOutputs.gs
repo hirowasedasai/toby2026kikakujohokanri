@@ -47,7 +47,7 @@ function formatBureauTime_(value) {
 }
 
 function bureauRecordFromInputRow_(row, rowNumber, batch, headerPositions) {
-  return {
+  var record = {
     timestamp: bureauInputField_(row, headerPositions, 'timestamp'),
     bureau: normalizeText_(bureauInputField_(row, headerPositions, 'bureau')),
     department: bureauInputField_(row, headerPositions, 'department'),
@@ -81,6 +81,8 @@ function bureauRecordFromInputRow_(row, rowNumber, batch, headerPositions) {
     changeStatus: '変更なし',
     lastChangeAt: ''
   };
+  record.matchProjectKeys = [normalizeProjectNameKey_(record.projectName)];
+  return record;
 }
 
 function scheduleSummary_(record) {
@@ -329,6 +331,12 @@ function evaluateStaffChange_(change, projectIndex) {
   target.changeStatus = '自動反映済み';
   target.lastChangeAt = change.timestamp;
   if (previousProjectKey !== nextProjectKey) {
+    if (target.matchProjectKeys.indexOf(previousProjectKey) < 0) {
+      target.matchProjectKeys.push(previousProjectKey);
+    }
+    if (target.matchProjectKeys.indexOf(nextProjectKey) < 0) {
+      target.matchProjectKeys.push(nextProjectKey);
+    }
     removeProjectIndexRecord_(projectIndex, previousProjectKey, target);
     addProjectIndexRecord_(projectIndex, target);
   }
@@ -403,6 +411,7 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau) {
     issues: issues,
     skipped: skipped,
     appliedChanges: appliedChanges,
+    records: baseRecords,
     sourceRowCount: baseRecords.length + changeRecords.length
   };
 }
@@ -422,14 +431,92 @@ function writeGeneratedHeaders_(sheet, headers) {
   sheet.setFrozenRows(1);
 }
 
+function bureauManualDefaultByHeader_(record, header) {
+  var values = {
+    '内部向け企画・取り組み名': record ? record.projectName : '',
+    '掲載文字情報': record ? record.introduction : '',
+    'ページ名': '',
+    '掲載媒体': '',
+    '当媒チェック': '未確認',
+    '校閲チェック': '未確認'
+  };
+  var normalized = normalizeHeader_(header);
+  return Object.prototype.hasOwnProperty.call(values, normalized)
+    ? safeBureauOutputCell_(values[normalized])
+    : '';
+}
+
+function isBureauManualHeader_(header) {
+  var normalized = normalizeHeader_(header);
+  return APP_CONFIG.bureauManualHeaders.some(function (candidate) {
+    return normalizeHeader_(candidate) === normalized;
+  });
+}
+
+function migratePreviousBureauRows_(values) {
+  if (!values || values.length < 2) return [];
+  var previousHeaders = values[0];
+  var previousIndex = buildHeaderIndex_(previousHeaders);
+  var projectColumn = previousIndex[normalizeHeader_('企画名')];
+  var introductionColumn = previousIndex[normalizeHeader_('企画紹介文')];
+  return values.slice(1).filter(function (row) {
+    return !isBlankRow_(row);
+  }).map(function (row) {
+    var record = {
+      projectName: projectColumn === undefined ? '' : row[projectColumn],
+      introduction: introductionColumn === undefined ? '' : row[introductionColumn]
+    };
+    return APP_CONFIG.bureauOutputHeaders.map(function (header) {
+      var previousColumn = previousIndex[normalizeHeader_(header)];
+      if (previousColumn !== undefined) return row[previousColumn];
+      return bureauManualDefaultByHeader_(record, header);
+    });
+  });
+}
+
+function migrateBureauSheet_(sheet, values) {
+  var migratedRows = migratePreviousBureauRows_(values);
+  var lastRow = sheet.getLastRow();
+  var lastColumn = sheet.getLastColumn();
+  if (lastRow > 0 && lastColumn > 0) {
+    sheet.getRange(1, 1, lastRow, lastColumn).clearContent();
+  }
+  sheet.getRange(1, 1, 1, APP_CONFIG.bureauOutputHeaders.length)
+    .setValues([APP_CONFIG.bureauOutputHeaders.slice()]);
+  if (migratedRows.length > 0) {
+    sheet.getRange(2, 1, migratedRows.length, APP_CONFIG.bureauOutputHeaders.length)
+      .setValues(migratedRows);
+  }
+  sheet.setFrozenRows(1);
+}
+
+function applyBureauCheckValidation_(sheet, headerIndex) {
+  var rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['未確認', '確認中', '確認済み', '修正必要'], true)
+    .setAllowInvalid(false)
+    .build();
+  ['当媒チェック', '校閲チェック'].forEach(function (header) {
+    var column = headerIndex[normalizeHeader_(header)];
+    if (column === undefined) return;
+    sheet.getRange(2, column + 1, Math.max(sheet.getMaxRows() - 1, 1), 1)
+      .setDataValidation(rule);
+  });
+}
+
 function prepareBureauOutputSheets_(spreadsheet) {
   return APP_CONFIG.sheets.bureauOutputs.map(function (output) {
     var sheet = requireSheet_(spreadsheet, output.name);
     var values = readSheetValues_(sheet);
+    var schemaChanged = false;
     if (values.length === 0 || isBlankRow_(values[0])) {
       writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
+      schemaChanged = true;
+    } else if (headerSetMatches_(values[0], APP_CONFIG.previousBureauOutputHeaders)) {
+      migrateBureauSheet_(sheet, values);
+      schemaChanged = true;
     } else if (headerSetMatches_(values[0], APP_CONFIG.legacyBureauOutputHeaders)) {
       writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
+      schemaChanged = true;
     }
     var validation = validateExactHeaders_(
       sheet,
@@ -437,6 +524,7 @@ function prepareBureauOutputSheets_(spreadsheet) {
       'E_BUREAU_OUTPUT_HEADER_MISSING'
     );
     validation.bureau = output.bureau;
+    if (schemaChanged) applyBureauCheckValidation_(sheet, validation.headerIndex);
     return validation;
   });
 }
@@ -455,12 +543,305 @@ function prepareManualReviewSheet_(spreadsheet) {
   );
 }
 
-function replaceBureauOutputData_(sheet, rows, width) {
-  var previousDataRows = Math.max(sheet.getLastRow() - 1, 0);
-  if (rows.length > 0) sheet.getRange(2, 1, rows.length, width).setValues(rows);
-  if (previousDataRows > rows.length) {
-    sheet.getRange(rows.length + 2, 1, previousDataRows - rows.length, width).clearContent();
-  }
+function bureauRowsEqual_(left, right) {
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every(function (value, index) {
+    return stringifyCell_(value) === stringifyCell_(right[index]);
+  });
+}
+
+function changedBureauSegments_(existingRow, mergedRow) {
+  var segments = [];
+  var current = null;
+  mergedRow.forEach(function (value, index) {
+    if (stringifyCell_(existingRow[index]) === stringifyCell_(value)) {
+      current = null;
+      return;
+    }
+    if (!current || current.startColumn + current.values.length !== index + 1) {
+      current = { startColumn: index + 1, values: [] };
+      segments.push(current);
+    }
+    current.values.push(value);
+  });
+  return segments;
+}
+
+function mergeBureauRecordWithManualRow_(record, existingRow, existingHeaders, targetHeaders) {
+  var existingIndex = existingHeaders ? buildHeaderIndex_(existingHeaders) : {};
+  var existingIntroductionColumn = existingIndex[normalizeHeader_('企画紹介文')];
+  var introductionChanged = Boolean(existingRow) && existingIntroductionColumn !== undefined &&
+    normalizeChangeValue_(existingRow[existingIntroductionColumn]) !==
+      normalizeChangeValue_(record.introduction);
+  return targetHeaders.map(function (header) {
+    if (!isBureauManualHeader_(header)) return bureauOutputValueByHeader_(record, header);
+    if (
+      introductionChanged &&
+      (normalizeHeader_(header) === normalizeHeader_('当媒チェック') ||
+        normalizeHeader_(header) === normalizeHeader_('校閲チェック'))
+    ) {
+      return '未確認';
+    }
+    var existingColumn = existingIndex[normalizeHeader_(header)];
+    if (existingRow && existingColumn !== undefined) return existingRow[existingColumn];
+    return bureauManualDefaultByHeader_(record, header);
+  });
+}
+
+function manualReviewFromRecord_(record, reason) {
+  return {
+    reviewKey: record.sourceSheet + ':' + record.rowNumber,
+    timestamp: record.timestamp,
+    bureau: record.bureau,
+    department: record.department,
+    projectName: record.projectName,
+    staffName: record.staffName,
+    reason: reason,
+    beforeChange: record.beforeChange || '',
+    afterChange: record.afterChange || '',
+    beforeImage: record.beforeImage || '',
+    afterImage: record.afterImage || '',
+    sourceSheet: record.sourceSheet,
+    rowNumber: record.rowNumber
+  };
+}
+
+function existingBureauEntries_(bureauOutputs) {
+  var entries = [];
+  bureauOutputs.forEach(function (output) {
+    var headers = output.values[0] || [];
+    var index = buildHeaderIndex_(headers);
+    var projectColumn = index[normalizeHeader_('企画名')];
+    output.values.slice(1).forEach(function (row, offset) {
+      if (isBlankRow_(row)) return;
+      entries.push({
+        id: entries.length,
+        output: output,
+        row: row,
+        rowNumber: offset + 2,
+        projectKey: normalizeProjectNameKey_(row[projectColumn])
+      });
+    });
+  });
+  return entries;
+}
+
+function uniqueEntries_(entries) {
+  var seen = {};
+  return entries.filter(function (entry) {
+    if (seen[entry.id]) return false;
+    seen[entry.id] = true;
+    return true;
+  });
+}
+
+function planBureauDelta_(bureauOutputs, records) {
+  var existing = existingBureauEntries_(bureauOutputs);
+  var existingByKey = {};
+  existing.forEach(function (entry) {
+    if (!existingByKey[entry.projectKey]) existingByKey[entry.projectKey] = [];
+    existingByKey[entry.projectKey].push(entry);
+  });
+  var desiredCounts = {};
+  var desiredAliases = {};
+  records.forEach(function (record) {
+    var finalKey = normalizeProjectNameKey_(record.projectName);
+    desiredCounts[finalKey] = (desiredCounts[finalKey] || 0) + 1;
+    (record.matchProjectKeys || [finalKey]).forEach(function (key) {
+      if (key) desiredAliases[key] = true;
+    });
+  });
+
+  var delta = {
+    appends: [],
+    updates: [],
+    deletes: [],
+    reviews: [],
+    issues: [],
+    created: 0,
+    updated: 0,
+    skipped: 0
+  };
+  var consumed = {};
+  records.forEach(function (record) {
+    var finalKey = normalizeProjectNameKey_(record.projectName);
+    if (!finalKey || desiredCounts[finalKey] > 1) {
+      var sourceReason = !finalKey
+        ? '企画名が空欄のため局別タブへ追加できません。'
+        : '同じ企画名の通常回答が複数あるため差分更新しません。';
+      delta.skipped += 1;
+      delta.reviews.push(manualReviewFromRecord_(record, sourceReason));
+      delta.issues.push(makeIssue_('WARN', 'E_BUREAU_SOURCE_PROJECT_AMBIGUOUS', sourceReason, {
+        sourceSheet: record.sourceSheet,
+        rowNumber: record.rowNumber,
+        columnName: '企画名'
+      }));
+      return;
+    }
+    var matchKeys = (record.matchProjectKeys || [finalKey]).filter(function (key, index, keys) {
+      return key && keys.indexOf(key) === index;
+    });
+    var candidates = uniqueEntries_(matchKeys.reduce(function (matches, key) {
+      return matches.concat(existingByKey[key] || []);
+    }, [])).filter(function (entry) {
+      return !consumed[entry.id];
+    });
+    if (candidates.length > 1) {
+      var existingReason = '企画名に一致する局別タブの既存行が複数あるため差分更新しません。';
+      delta.skipped += 1;
+      delta.reviews.push(manualReviewFromRecord_(record, existingReason));
+      delta.issues.push(makeIssue_('WARN', 'E_BUREAU_EXISTING_PROJECT_AMBIGUOUS', existingReason, {
+        sourceSheet: record.sourceSheet,
+        rowNumber: record.rowNumber,
+        columnName: '企画名'
+      }));
+      return;
+    }
+    var targetOutput = bureauOutputs.find(function (output) {
+      return normalizeText_(output.bureau) === normalizeText_(record.bureau);
+    });
+    if (!targetOutput) return;
+    if (candidates.length === 0) {
+      delta.appends.push({
+        output: targetOutput,
+        row: mergeBureauRecordWithManualRow_(record, null, null, targetOutput.values[0])
+      });
+      delta.created += 1;
+      return;
+    }
+    var existingEntry = candidates[0];
+    consumed[existingEntry.id] = true;
+    var merged = mergeBureauRecordWithManualRow_(
+      record,
+      existingEntry.row,
+      existingEntry.output.values[0],
+      targetOutput.values[0]
+    );
+    if (existingEntry.output === targetOutput) {
+      if (bureauRowsEqual_(existingEntry.row.slice(0, merged.length), merged)) {
+        delta.skipped += 1;
+        return;
+      }
+      delta.updates.push({
+        output: targetOutput,
+        rowNumber: existingEntry.rowNumber,
+        row: merged,
+        segments: changedBureauSegments_(existingEntry.row, merged)
+      });
+      delta.updated += 1;
+      return;
+    }
+    delta.appends.push({
+      output: targetOutput,
+      row: merged,
+      source: existingEntry,
+      record: record
+    });
+    delta.deletes.push(existingEntry);
+    delta.updated += 1;
+  });
+
+  existing.forEach(function (entry) {
+    if (consumed[entry.id] || desiredAliases[entry.projectKey]) return;
+    var headers = entry.output.values[0];
+    var index = buildHeaderIndex_(headers);
+    var preservedRecord = {
+      timestamp: '',
+      bureau: entry.output.bureau,
+      department: entry.row[index[normalizeHeader_('部署名')]],
+      projectName: entry.row[index[normalizeHeader_('企画名')]],
+      staffName: entry.row[index[normalizeHeader_('担当者名')]],
+      sourceSheet: entry.output.sheet.getName(),
+      rowNumber: entry.rowNumber
+    };
+    var orphanReason = '入力回答と照合できない既存行を削除せず保持しています。';
+    delta.reviews.push(manualReviewFromRecord_(preservedRecord, orphanReason));
+    delta.issues.push(makeIssue_('WARN', 'E_BUREAU_ORPHAN_PRESERVED', orphanReason, {
+      sourceSheet: entry.output.sheet.getName(),
+      rowNumber: entry.rowNumber,
+      columnName: '企画名'
+    }));
+  });
+  return delta;
+}
+
+function applyBureauDelta_(delta) {
+  delta.updates.forEach(function (update) {
+    update.segments.forEach(function (segment) {
+      update.output.sheet.getRange(update.rowNumber, segment.startColumn, 1, segment.values.length)
+        .setValues([segment.values]);
+    });
+  });
+  var appendGroups = {};
+  var approvedMoveSources = {};
+  delta.appends.forEach(function (append) {
+    if (append.source) {
+      var sourceHeaders = append.source.output.values[0];
+      var latestSourceRow = append.source.output.sheet
+        .getRange(append.source.rowNumber, 1, 1, sourceHeaders.length)
+        .getValues()[0];
+      var sourceProjectColumn = buildHeaderIndex_(sourceHeaders)[normalizeHeader_('企画名')];
+      if (normalizeProjectNameKey_(latestSourceRow[sourceProjectColumn]) !== append.source.projectKey) {
+        var beforeMoveReason = '所属局移動前に移動元行が変わったため、この企画だけをスキップしました。';
+        delta.updated = Math.max(delta.updated - 1, 0);
+        delta.skipped += 1;
+        delta.reviews.push(manualReviewFromRecord_(append.record, beforeMoveReason));
+        delta.issues.push(makeIssue_('WARN', 'E_BUREAU_MOVE_SOURCE_CHANGED', beforeMoveReason, {
+          sourceSheet: append.record.sourceSheet,
+          rowNumber: append.record.rowNumber,
+          columnName: '企画名'
+        }));
+        return;
+      }
+      append.row = mergeBureauRecordWithManualRow_(
+        append.record,
+        latestSourceRow,
+        sourceHeaders,
+        append.output.values[0]
+      );
+      approvedMoveSources[append.source.id] = append.record;
+    }
+    var key = append.output.bureau;
+    if (!appendGroups[key]) appendGroups[key] = { output: append.output, rows: [] };
+    appendGroups[key].rows.push(append.row);
+  });
+  Object.keys(appendGroups).forEach(function (key) {
+    var group = appendGroups[key];
+    var startRow = group.output.sheet.getLastRow() + 1;
+    group.output.sheet.getRange(startRow, 1, group.rows.length, group.rows[0].length)
+      .setValues(group.rows);
+  });
+  var deleteGroups = {};
+  delta.deletes.forEach(function (entry) {
+    if (!approvedMoveSources[entry.id]) return;
+    var key = entry.output.bureau;
+    if (!deleteGroups[key]) deleteGroups[key] = { output: entry.output, rows: [] };
+    deleteGroups[key].rows.push(entry.rowNumber);
+  });
+  Object.keys(deleteGroups).forEach(function (key) {
+    var group = deleteGroups[key];
+    group.rows.sort(function (left, right) { return right - left; }).forEach(function (rowNumber) {
+      var headers = group.output.values[0];
+      var projectColumn = buildHeaderIndex_(headers)[normalizeHeader_('企画名')];
+      var currentProject = group.output.sheet.getRange(rowNumber, projectColumn + 1).getValue();
+      var expectedEntry = delta.deletes.find(function (entry) {
+        return entry.output === group.output && entry.rowNumber === rowNumber;
+      });
+      if (!expectedEntry || normalizeProjectNameKey_(currentProject) !== expectedEntry.projectKey) {
+        var afterMoveReason = '所属局移動後に削除対象行が変わったため、移動元を削除せず保持しました。';
+        var moveRecord = expectedEntry ? approvedMoveSources[expectedEntry.id] : null;
+        delta.skipped += 1;
+        if (moveRecord) delta.reviews.push(manualReviewFromRecord_(moveRecord, afterMoveReason));
+        delta.issues.push(makeIssue_('WARN', 'E_BUREAU_MOVE_SOURCE_CHANGED', afterMoveReason, {
+          sourceSheet: group.output.sheet.getName(),
+          rowNumber: rowNumber,
+          columnName: '企画名'
+        }));
+        return;
+      }
+      group.output.sheet.deleteRow(rowNumber);
+    });
+  });
 }
 
 function existingReviewStatuses_(values) {
@@ -508,22 +889,43 @@ function pendingManualReviewCountFromValues_(values) {
   }).length;
 }
 
-function replaceManualReviewData_(reviewSheet, reviews) {
-  var headers = reviewSheet.values[0];
-  var statuses = existingReviewStatuses_(reviewSheet.values);
-  var rows = reviews.map(function (review) {
-    return headers.map(function (header) {
+function syncManualReviewData_(reviewSheet, reviews) {
+  var latestValues = readSheetValues_(reviewSheet.sheet);
+  var headers = latestValues[0];
+  var index = buildHeaderIndex_(headers);
+  var keyColumn = index[normalizeHeader_('確認キー')];
+  var statusColumn = index[normalizeHeader_('対応状況')];
+  var statuses = existingReviewStatuses_(latestValues);
+  var existingByKey = {};
+  latestValues.slice(1).forEach(function (row, offset) {
+    var key = normalizeText_(row[keyColumn]);
+    if (key && !existingByKey[key]) {
+      existingByKey[key] = { row: row, rowNumber: offset + 2 };
+    }
+  });
+  var appends = [];
+  reviews.forEach(function (review) {
+    var desired = headers.map(function (header) {
       return manualReviewValueByHeader_(review, header, statuses);
     });
+    var existing = existingByKey[review.reviewKey];
+    if (!existing) {
+      appends.push(desired);
+      return;
+    }
+    desired[statusColumn] = existing.row[statusColumn];
+    changedBureauSegments_(existing.row, desired).forEach(function (segment) {
+      reviewSheet.sheet
+        .getRange(existing.rowNumber, segment.startColumn, 1, segment.values.length)
+        .setValues([segment.values]);
+    });
   });
-  var previousDataRows = Math.max(reviewSheet.sheet.getLastRow() - 1, 0);
-  if (rows.length > 0) reviewSheet.sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
-  if (previousDataRows > rows.length) {
-    reviewSheet.sheet.getRange(rows.length + 2, 1, previousDataRows - rows.length, headers.length).clearContent();
+  if (appends.length > 0) {
+    reviewSheet.sheet
+      .getRange(reviewSheet.sheet.getLastRow() + 1, 1, appends.length, headers.length)
+      .setValues(appends);
   }
-  var pending = rows.filter(function (row) {
-    return normalizeText_(row[headers.map(normalizeHeader_).indexOf(normalizeHeader_('対応状況'))]) !== '対応済み';
-  }).length;
+  var pending = pendingManualReviewCountFromValues_(readSheetValues_(reviewSheet.sheet));
   reviewSheet.sheet.setTabColor(pending > 0 ? '#d93025' : null);
   return pending;
 }
@@ -543,22 +945,20 @@ function performBuildBureauOutputs_(suppliedPreflight, executionId) {
     headersByBureau[output.bureau] = output.values[0];
   });
   var plan = buildBureauOutputPlan_(preflight.inputs, headersByBureau);
-  var created = 0;
-  bureauOutputs.forEach(function (output) {
-    var rows = plan.rowsByBureau[output.bureau];
-    replaceBureauOutputData_(output.sheet, rows, output.values[0].length);
-    created += rows.length;
-  });
-  var pendingReviews = replaceManualReviewData_(manualReview, plan.reviews);
+  var delta = planBureauDelta_(bureauOutputs, plan.records);
+  applyBureauDelta_(delta);
+  var allReviews = plan.reviews.concat(delta.reviews);
+  var pendingReviews = syncManualReviewData_(manualReview, allReviews);
+  var issues = plan.issues.concat(delta.issues);
   var summary = {
-    created: created,
-    updated: plan.appliedChanges,
-    skipped: plan.skipped,
+    created: delta.created,
+    updated: delta.updated,
+    skipped: plan.skipped + delta.skipped,
     needsReview: pendingReviews,
-    errors: plan.issues.length,
+    errors: issues.length,
     executionId: executionId
   };
-  appendProcessLog_(preflight, executionId, 'buildOutput:bureaus', summary, plan.issues);
+  appendProcessLog_(preflight, executionId, 'syncDelta:bureaus', summary, issues);
   return summary;
 }
 
@@ -568,12 +968,12 @@ function buildBureauOutputs() {
     var summary = withScriptLock_(function () {
       return performBuildBureauOutputs_(null, executionId);
     });
-    showSummary_('局別タブ更新完了', summary);
+    showSummary_('局別タブ差分同期完了', summary);
     return summary;
   } catch (error) {
-    safeAppendFailureLog_('buildOutput:bureaus', executionId, error);
+    safeAppendFailureLog_('syncDelta:bureaus', executionId, error);
     SpreadsheetApp.getUi().alert(
-      '局別タブ更新失敗',
+      '局別タブ差分同期失敗',
       (error.code || 'E_UNEXPECTED') + ': ' + sanitizeLogText_(error.message),
       SpreadsheetApp.getUi().ButtonSet.OK
     );
@@ -600,5 +1000,32 @@ function showPendingManualReviewToast_() {
     }
   } catch {
     console.error('Manual review notification could not be shown.');
+  }
+}
+
+function onEdit(event) {
+  try {
+    if (!event || !event.range || event.range.getRow() <= 1) return;
+    var sheet = event.range.getSheet();
+    var isBureauSheet = APP_CONFIG.sheets.bureauOutputs.some(function (output) {
+      return output.name === sheet.getName();
+    });
+    if (!isBureauSheet) return;
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var index = buildHeaderIndex_(headers);
+    var publishedColumn = index[normalizeHeader_('掲載文字情報')];
+    if (publishedColumn === undefined) return;
+    var firstEditedColumn = event.range.getColumn() - 1;
+    var lastEditedColumn = firstEditedColumn + event.range.getNumColumns() - 1;
+    if (publishedColumn < firstEditedColumn || publishedColumn > lastEditedColumn) return;
+    var rowCount = event.range.getNumRows();
+    ['当媒チェック', '校閲チェック'].forEach(function (header) {
+      var checkColumn = index[normalizeHeader_(header)];
+      if (checkColumn === undefined) return;
+      var values = Array.from({ length: rowCount }, function () { return ['未確認']; });
+      sheet.getRange(event.range.getRow(), checkColumn + 1, rowCount, 1).setValues(values);
+    });
+  } catch {
+    console.error('Bureau manual check reset could not be applied.');
   }
 }

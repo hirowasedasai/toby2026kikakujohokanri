@@ -83,7 +83,49 @@ var APP_CONFIG = Object.freeze({
     '画像リンク',
     '要確認'
   ]),
+  bureauAutomaticHeaders: Object.freeze([
+    '企画名',
+    '企画紹介文',
+    '担当者名',
+    '部署名',
+    '企画場所',
+    '企画日時',
+    '企画ジャンル',
+    '整理券情報',
+    'ゲスト情報',
+    '備考',
+    '変更反映状況',
+    '最終変更申請日時'
+  ]),
+  bureauManualHeaders: Object.freeze([
+    '内部向け企画・取り組み名',
+    '掲載文字情報',
+    'ページ名',
+    '掲載媒体',
+    '当媒チェック',
+    '校閲チェック'
+  ]),
   bureauOutputHeaders: Object.freeze([
+    '企画名',
+    '内部向け企画・取り組み名',
+    '企画紹介文',
+    '掲載文字情報',
+    'ページ名',
+    '掲載媒体',
+    '担当者名',
+    '部署名',
+    '企画場所',
+    '企画日時',
+    '企画ジャンル',
+    '整理券情報',
+    'ゲスト情報',
+    '備考',
+    '当媒チェック',
+    '校閲チェック',
+    '変更反映状況',
+    '最終変更申請日時'
+  ]),
+  previousBureauOutputHeaders: Object.freeze([
     '企画名',
     '企画紹介文',
     '担当者名',
@@ -233,7 +275,7 @@ var APP_CONFIG = Object.freeze({
   }),
   staffChangeFields: Object.freeze([
     Object.freeze({ field: 'projectName', labels: Object.freeze(['企画名', '外部向け企画・取り組み名']) }),
-    Object.freeze({ field: 'introduction', labels: Object.freeze(['企画紹介文', '企画紹介文（75字以内）', '掲載文字情報']) }),
+    Object.freeze({ field: 'introduction', labels: Object.freeze(['企画紹介文', '企画紹介文（75字以内）']) }),
     Object.freeze({ field: 'staffName', labels: Object.freeze(['担当者名', '責任者名']) }),
     Object.freeze({ field: 'bureau', labels: Object.freeze(['所属局']) }),
     Object.freeze({ field: 'department', labels: Object.freeze(['部署名', '部署名（チーム、PJなど）', 'チーム・班']) }),

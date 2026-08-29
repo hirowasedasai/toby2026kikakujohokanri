@@ -27,6 +27,10 @@
 | `E_CHANGE_BEFORE_MISMATCH` | 通常回答の現在値と変更前を照合し、先行変更や転記差異を人力確認する |
 | `E_CHANGE_BUREAU_MISMATCH` / `E_CHANGE_DEPARTMENT_MISMATCH` | 所属局・部署名を回答原本で確認し、自動上書きしない |
 | `E_CHANGE_IMAGE_REVIEW_REQUIRED` | 画像変更を`26要手動確認`で人力確認する |
+| `E_BUREAU_SOURCE_PROJECT_AMBIGUOUS` | 通常回答の企画名空欄・重複を確認し、局別行を自動統合しない |
+| `E_BUREAU_EXISTING_PROJECT_AMBIGUOUS` | 局別タブに重複する企画名がある。手動6列を確認してから権限者が解消する |
+| `E_BUREAU_ORPHAN_PRESERVED` | 入力と照合できない局別行を確認する。差分同期はその行を削除せず保持する |
+| `E_BUREAU_MOVE_SOURCE_CHANGED` | 所属局移動中に移動元行が変化した。移動先の重複有無と移動元の手動6列を確認し、自動削除しない |
 | `E_LOCK_TIMEOUT` | 重複実行や長時間実行を確認し、時間を置く |
 
 ## 復旧
