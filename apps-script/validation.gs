@@ -60,15 +60,30 @@ function buildHeaderIndex_(headers) {
   return index;
 }
 
+function buildHeaderPositions_(headers) {
+  var positions = {};
+  headers.forEach(function (header, position) {
+    var normalized = normalizeHeader_(header);
+    if (!normalized) return;
+    if (!Object.prototype.hasOwnProperty.call(positions, normalized)) {
+      positions[normalized] = [];
+    }
+    positions[normalized].push(position);
+  });
+  return positions;
+}
+
 function resolveHeaders_(headers, candidates, requiredFields) {
-  var headerIndex = buildHeaderIndex_(headers);
+  var headerPositions = buildHeaderPositions_(headers);
   var resolved = {};
   var alternatives = {};
   Object.keys(candidates).forEach(function (field) {
-    alternatives[field] = candidates[field].filter(function (candidate) {
-      return Object.prototype.hasOwnProperty.call(headerIndex, normalizeHeader_(candidate));
-    }).map(function (candidate) {
-      return headerIndex[normalizeHeader_(candidate)];
+    alternatives[field] = candidates[field].reduce(function (positions, candidate) {
+      var normalized = normalizeHeader_(candidate);
+      if (!Object.prototype.hasOwnProperty.call(headerPositions, normalized)) return positions;
+      return positions.concat(headerPositions[normalized]);
+    }, []).filter(function (position, index, positions) {
+      return positions.indexOf(position) === index;
     });
     resolved[field] = alternatives[field].length === 0 ? -1 : alternatives[field][0];
   });

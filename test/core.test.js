@@ -74,6 +74,36 @@ test('ヘッダー順変更と表記ゆれを候補名から解決する', () =>
   assert.equal(batch.columns.projectName, 4);
 });
 
+test('入力フォームの未使用重複ヘッダーを許容する', () => {
+  const headers = [
+    'メールアドレス',
+    '参加企画',
+    '団体名',
+    '企画名',
+    'サムネイル画像ファイル名',
+    'サムネイル画像ファイル名'
+  ];
+  const resolution = context.resolveHeaders_(
+    headers,
+    context.APP_CONFIG.inputHeaderCandidates,
+    context.APP_CONFIG.requiredInputFields
+  );
+  assert.deepEqual(plain(resolution.missing), []);
+  assert.equal(resolution.columns.email, 0);
+  assert.equal(resolution.columns.projectName, 3);
+});
+
+test('入力フォームの同名候補列は行ごとの代替候補として保持する', () => {
+  const headers = ['メールアドレス', '参加企画', '団体名', '企画名', '企画名'];
+  const batch = makeBatch(headers, [
+    ['duplicate@example.com', '教室企画', '合成団体', '', '重複列の企画名']
+  ]);
+  assert.deepEqual(plain(batch.columnAlternatives.projectName), [3, 4]);
+
+  const result = context.planMasterUpsert_(masterHeaders, [], [batch], 'TIME');
+  assert.equal(masterValue(result.rows[0], '企画名'), '重複列の企画名');
+});
+
 test('運スタ企画フォームを通常入力として部署名と固定参加区分で解決する', () => {
   const source = context.APP_CONFIG.sheets.inputs.find(
     (input) => input.name === '26運スタ企画フォーム回答'
