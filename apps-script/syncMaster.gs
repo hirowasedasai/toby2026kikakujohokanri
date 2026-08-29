@@ -10,7 +10,10 @@ function inputField_(row, batch, field) {
     var value = inputCell_(row, alternatives[i]);
     if (normalizeText_(value)) return value;
   }
-  return inputCell_(row, batch.columns[field]);
+  var fallback = inputCell_(row, batch.columns[field]);
+  if (normalizeText_(fallback)) return fallback;
+  var defaults = batch.source && batch.source.defaults ? batch.source.defaults : {};
+  return Object.prototype.hasOwnProperty.call(defaults, field) ? defaults[field] : fallback;
 }
 
 function collectInputRecords_(inputBatches) {
@@ -19,6 +22,7 @@ function collectInputRecords_(inputBatches) {
   var skipped = 0;
 
   inputBatches.forEach(function (batch) {
+    if (batch.source && batch.source.syncToMaster === false) return;
     batch.values.slice(1).forEach(function (row, offset) {
       var rowNumber = offset + 2;
       if (isBlankRow_(row)) return;
@@ -27,6 +31,7 @@ function collectInputRecords_(inputBatches) {
         officialId: normalizeText_(inputField_(row, batch, 'officialId')),
         email: normalizeEmail_(inputField_(row, batch, 'email')),
         participation: normalizeText_(inputField_(row, batch, 'participation')),
+        bureau: normalizeText_(inputField_(row, batch, 'bureau')),
         organization: normalizeText_(inputField_(row, batch, 'organization')),
         projectName: normalizeText_(inputField_(row, batch, 'projectName')),
         salesItems: normalizeText_(inputField_(row, batch, 'salesItems')),
@@ -67,6 +72,7 @@ function collectInputRecords_(inputBatches) {
       var formulaField = [
         ['企画ID', record.officialId],
         ['参加企画', record.participation],
+        ['所属局', record.bureau],
         ['団体名', record.organization],
         ['企画名', record.projectName],
         ['販売物', record.salesItems],
@@ -179,6 +185,7 @@ function makeNewMasterRow_(headers, index, record, currentIso, reviewReason) {
   );
   setMasterCell_(row, index, 'メールアドレス', record.email);
   setMasterCell_(row, index, '参加企画', record.participation);
+  setMasterCell_(row, index, '所属局', record.bureau);
   setMasterCell_(row, index, '団体名', record.organization);
   setMasterCell_(row, index, '企画名', record.projectName);
   setMasterCell_(row, index, '販売物', record.salesItems);
@@ -195,6 +202,7 @@ function updateExistingMasterRow_(masterRecord, index, record, currentIso) {
   var updates = {
     'メールアドレス': record.email,
     '参加企画': record.participation,
+    '所属局': record.bureau,
     '団体名': record.organization,
     '企画名': record.projectName,
     '販売物': record.salesItems,
@@ -204,7 +212,7 @@ function updateExistingMasterRow_(masterRecord, index, record, currentIso) {
   var changed = false;
   Object.keys(updates).forEach(function (header) {
     var nextValue = updates[header];
-    if (!nextValue && (header === '販売物' || header === '画像リンク')) return;
+    if (!nextValue && (header === '所属局' || header === '販売物' || header === '画像リンク')) return;
     if (valuesDiffer_(getMasterCell_(masterRecord.row, index, header), nextValue)) {
       setMasterCell_(masterRecord.row, index, header, nextValue);
       changed = true;

@@ -3,7 +3,7 @@
 ## 初回構築
 
 1. 管理者がstaging用とproduction用に別々のGoogle Spreadsheetを用意し、それぞれにcontainer-bound Apps Script projectを作る。
-2. 各Spreadsheetに入力3タブを正しいフォーム連携で用意する。スクリプトからは作成しない。
+2. 各Spreadsheetに入力4タブを正しいフォーム連携で用意する。スクリプトからは作成しない。
 3. 各projectのScript Propertiesへ`APP_ENV`、`EXPECTED_SPREADSHEET_ID`、`RELEASE_ID`、`ENABLE_SCHEDULED_SYNC`を設定する。
 4. ローカルにignore済みの`.clasp.staging.json`と`.clasp.production.json`を用意する。
 5. `npm install`と`npm run verify`を実行する。
@@ -16,14 +16,15 @@
 1. `当日情報媒体AI > 事前チェック`で環境、タブ、ヘッダーを検証する。
 2. `ドライラン: フォーム回答を同期`で件数と要確認を確認する。dry runは入力・マスター・出力を変えず、ログだけを追記する。
 3. `フォーム回答を同期`を実行し、`26処理ログ`の同じ実行IDを確認する。
-4. 要確認行を権限者が解決する。自動統合はしない。
-5. `参参一覧を更新`と`屋台情報まとめを更新`、または`全処理を実行`を使う。
+4. 変更申請2タブの新規回答を権限者が確認し、必要な変更をマスターへ明示反映する。自由記述の変更申請は自動反映しない。
+5. 要確認行を権限者が解決する。自動統合はしない。
+6. `参参一覧を更新`と`屋台情報まとめを更新`、または`全処理を実行`を使う。
 
 行エラーは正常行を止めない。タブ欠落、環境不一致、必須ヘッダー欠落、マスターキー重複は全体を止める。エラー調査では行番号と列名を使い、処理ログへ原文を転記しない。
 
 ## 自動実行
 
-初期状態でinstallable triggerはない。必要な場合だけ`installTriggers`を関数として実行する。フォーム送信時triggerは入力3タブからのイベントだけを処理する。時間主導同期は`ENABLE_SCHEDULED_SYNC=true`の場合だけ1時間ごとに作る。重複triggerは作らない。
+初期状態でinstallable triggerはない。必要な場合だけ`installTriggers`を関数として実行する。フォーム送信時triggerは通常提出2タブからのイベントだけを処理し、変更申請2タブでは同期を起動しない。時間主導同期は`ENABLE_SCHEDULED_SYNC=true`の場合だけ1時間ごとに作る。重複triggerは作らない。
 
 triggerはインストールした作成者アカウントの権限で実行される。退任・異動前に後任が権限とtriggerを引き継ぐ。productionでのinstall/uninstallは確認ダイアログを必須とする。
 

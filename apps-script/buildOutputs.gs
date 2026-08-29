@@ -19,6 +19,7 @@ function outputRecordFromMaster_(row, index) {
   return {
     managementId: normalizeText_(getMasterCell_(row, index, '管理ID')),
     participation: normalizeText_(getMasterCell_(row, index, '参加企画')),
+    bureau: normalizeText_(getMasterCell_(row, index, '所属局')),
     organization: normalizeText_(getMasterCell_(row, index, '団体名')),
     projectName: normalizeText_(getMasterCell_(row, index, '企画名')),
     salesItems: normalizeText_(getMasterCell_(row, index, '販売物')),
@@ -49,6 +50,7 @@ function outputValueByHeader_(record, header) {
   var values = {
     '管理id': record.managementId,
     '参加企画': record.participation,
+    '所属局': record.bureau,
     '団体名': record.organization,
     '企画名': record.projectName,
     '販売物': record.salesItems,

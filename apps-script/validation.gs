@@ -113,7 +113,14 @@ function validateExactHeaders_(sheet, requiredHeaders, code) {
   return { sheet: sheet, values: values, headerIndex: index };
 }
 
-function validateInputSheet_(sheet) {
+function requiredInputFieldsForSource_(source) {
+  var defaults = source && source.defaults ? source.defaults : {};
+  return APP_CONFIG.requiredInputFields.filter(function (field) {
+    return !normalizeText_(defaults[field]);
+  });
+}
+
+function validateInputSheet_(sheet, source) {
   var values = readSheetValues_(sheet);
   if (values.length === 0) {
     throw makeAppError_('E_INPUT_HEADER_MISSING', sheet.getName() + 'のヘッダー行がありません。', {
@@ -123,7 +130,7 @@ function validateInputSheet_(sheet) {
   var resolution = resolveHeaders_(
     values[0],
     APP_CONFIG.inputHeaderCandidates,
-    APP_CONFIG.requiredInputFields
+    requiredInputFieldsForSource_(source)
   );
   if (resolution.missing.length > 0) {
     throw makeAppError_(
@@ -140,6 +147,21 @@ function validateInputSheet_(sheet) {
   };
 }
 
+function validateReviewOnlyInputSheet_(sheet) {
+  var values = readSheetValues_(sheet);
+  if (values.length === 0 || isBlankRow_(values[0])) {
+    throw makeAppError_('E_INPUT_HEADER_MISSING', sheet.getName() + 'のヘッダー行がありません。', {
+      sheetName: sheet.getName()
+    });
+  }
+  return {
+    sheet: sheet,
+    values: values,
+    columns: {},
+    columnAlternatives: {}
+  };
+}
+
 function preflightInternal_(options) {
   var spreadsheet = getBoundSpreadsheet_();
   var settings = validateEnvironment_(spreadsheet);
@@ -147,7 +169,10 @@ function preflightInternal_(options) {
 
   if (options.inputs) {
     APP_CONFIG.sheets.inputs.forEach(function (source) {
-      var input = validateInputSheet_(requireSheet_(spreadsheet, source.name));
+      var sheet = requireSheet_(spreadsheet, source.name);
+      var input = source.syncToMaster === false
+        ? validateReviewOnlyInputSheet_(sheet)
+        : validateInputSheet_(sheet, source);
       input.source = source;
       result.inputs.push(input);
     });

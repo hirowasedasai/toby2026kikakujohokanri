@@ -61,10 +61,10 @@ function runTriggeredSync_(operation) {
 
 function handleFormSubmit_(event) {
   var sheetName = event && event.range && event.range.getSheet().getName();
-  var isManagedInput = APP_CONFIG.sheets.inputs.some(function (source) {
-    return source.name === sheetName;
+  var source = APP_CONFIG.sheets.inputs.find(function (candidate) {
+    return candidate.name === sheetName;
   });
-  if (!isManagedInput) return;
+  if (!source || source.syncToMaster === false) return;
   runTriggeredSync_('trigger:formSubmit');
 }
 

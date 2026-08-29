@@ -9,7 +9,7 @@ stagingとproductionは、スプレッドシートもApps Script projectも完�
 ## データフロー
 
 ```text
-入力3タブ（read-only）
+入力4タブ（read-only）
         │ ヘッダー解決・行検証・キー判定
         ▼
 26掲載情報マスター（唯一の正本）

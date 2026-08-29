@@ -10,7 +10,7 @@
 | リリース担当 | staging/production編集 | editor・trigger管理 | PR mergeと明示承認後のpush |
 | 監査担当 | ログread-only | Executions read-only | 履歴read-only |
 
-入力3タブにはフォーム連携以外の書き込みを行わない。マスター編集権限、処理ログ閲覧権限、Script Properties・trigger変更権限は少人数に限定する。メールを含むマスターとPIIを含まない出力で共有範囲を分ける。
+入力4タブにはフォーム連携以外の書き込みを行わない。マスター編集権限、処理ログ閲覧権限、Script Properties・trigger変更権限は少人数に限定する。メールを含むマスターとPIIを含まない出力で共有範囲を分ける。
 
 installable triggerは作成者アカウントの認可で動く。個人アカウントへの恒久依存を避け、組織管理アカウントで作成者、後任、定期棚卸し日を記録する。退任時は後任がtriggerを再作成し、旧作成者のtriggerを削除する。
 

@@ -74,6 +74,106 @@ test('ヘッダー順変更と表記ゆれを候補名から解決する', () =>
   assert.equal(batch.columns.projectName, 4);
 });
 
+test('運スタ企画フォームを通常入力として部署名と固定参加区分で解決する', () => {
+  const source = context.APP_CONFIG.sheets.inputs.find(
+    (input) => input.name === '26運スタ企画フォーム回答'
+  );
+  assert.ok(source);
+  assert.equal(context.APP_CONFIG.sheets.inputs.length, 4);
+
+  const headers = [
+    'メールアドレス',
+    '所属局',
+    '部署名（チーム、PJなど）',
+    '企画名（26字以内）'
+  ];
+  const resolution = context.resolveHeaders_(
+    headers,
+    context.APP_CONFIG.inputHeaderCandidates,
+    context.requiredInputFieldsForSource_(source)
+  );
+  assert.deepEqual(plain(resolution.missing), []);
+
+  const batch = {
+    values: [headers, ['staff@example.com', '企画局', '合成部署', '合成企画']],
+    columns: resolution.columns,
+    columnAlternatives: resolution.alternatives,
+    source
+  };
+  const result = context.planMasterUpsert_(masterHeaders, [], [batch], 'TIME');
+  assert.equal(result.summary.created, 1);
+  assert.equal(masterValue(result.rows[0], '参加企画'), '運営スタッフ企画');
+  assert.equal(masterValue(result.rows[0], '所属局'), '企画局');
+  assert.equal(masterValue(result.rows[0], '団体名'), '合成部署');
+  assert.equal(masterValue(result.rows[0], '企画名'), '合成企画');
+
+  const output = context.buildOutputPlan_(masterHeaders, result.rows, 'participant');
+  const bureauIndex = plain(context.APP_CONFIG.participantOutputHeaders).indexOf('所属局');
+  assert.equal(output.rows[0][bureauIndex], '企画局');
+});
+
+test('参参フォームの実ヘッダーを列番号に依存せず解決する', () => {
+  const source = context.APP_CONFIG.sheets.inputs.find(
+    (input) => input.name === '26参参フォーム回答'
+  );
+  const headers = [
+    '画像提出（飲食サムネイル画像）',
+    '企画名（24字以内）',
+    '販売物について',
+    '参加企画',
+    'メールアドレス',
+    '参加団体・参加者名（17字以内推奨・36字以内）',
+    '企画名（26字以内）',
+    'サムネイル画像提出'
+  ];
+  const resolution = context.resolveHeaders_(
+    headers,
+    context.APP_CONFIG.inputHeaderCandidates,
+    context.requiredInputFieldsForSource_(source)
+  );
+  assert.deepEqual(plain(resolution.missing), []);
+
+  const batch = {
+    values: [
+      headers,
+      ['', '', '', '教室企画', 'normal@example.com', '合成参加団体', '一般企画', '一般画像'],
+      ['飲食画像', '飲食企画', '合成販売物', '飲食物販売企画', 'food@example.com', '合成参加団体', '', '']
+    ],
+    columns: resolution.columns,
+    columnAlternatives: resolution.alternatives,
+    source
+  };
+  const collected = context.collectInputRecords_([batch]);
+  assert.equal(collected.records.length, 2);
+  assert.equal(collected.records[0].organization, '合成参加団体');
+  assert.equal(collected.records[0].projectName, '一般企画');
+  assert.equal(collected.records[0].imageLink, '一般画像');
+  assert.equal(collected.records[1].projectName, '飲食企画');
+  assert.equal(collected.records[1].salesItems, '合成販売物');
+  assert.equal(collected.records[1].imageLink, '飲食画像');
+});
+
+test('変更申請2タブは自由記述をマスターへ自動反映しない', () => {
+  const reviewSources = plain(context.APP_CONFIG.sheets.inputs).filter(
+    (source) => source.syncToMaster === false
+  );
+  assert.deepEqual(
+    reviewSources.map((source) => source.name),
+    ['26参参変更申請', '26運スタ企画変更申請']
+  );
+
+  const reviewBatch = {
+    values: [['タイムスタンプ', '変更内容'], ['TIME', '合成された変更内容']],
+    columns: {},
+    columnAlternatives: {},
+    source: reviewSources[0]
+  };
+  const collected = context.collectInputRecords_([reviewBatch]);
+  assert.equal(collected.records.length, 0);
+  assert.equal(collected.skipped, 0);
+  assert.equal(collected.issues.length, 0);
+});
+
 test('優先候補列が空なら同じ論理項目の次候補を行ごとに使う', () => {
   const headers = [
     'メールアドレス',
