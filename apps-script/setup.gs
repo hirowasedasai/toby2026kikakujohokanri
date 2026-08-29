@@ -18,6 +18,12 @@ function ensureBureauSchemaSheet_(spreadsheet, sheetName) {
   if (values.length === 0 || isBlankRow_(values[0])) {
     writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
     schemaChanged = true;
+  } else if (
+    headerSetMatches_(values[0], APP_CONFIG.bureauOutputHeaders) &&
+    !headerOrderMatches_(values[0], APP_CONFIG.bureauOutputHeaders)
+  ) {
+    migrateBureauSheet_(sheet, values);
+    schemaChanged = true;
   } else if (headerSetMatches_(values[0], APP_CONFIG.previousBureauOutputHeaders)) {
     migrateBureauSheet_(sheet, values);
     schemaChanged = true;

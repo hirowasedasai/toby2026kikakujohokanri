@@ -447,6 +447,61 @@ test('旧12列から手動6列を初期化して18列へ移行する', () => {
   assert.equal(migrated[0][headers.indexOf('校閲チェック')], '未確認');
 });
 
+test('局別18列は前年の業務順に並び、旧順序から値を保持して移行する', () => {
+  const expected = [
+    'ページ名',
+    '内部向け企画・取り組み名',
+    '企画名',
+    '掲載文字情報',
+    '担当者名',
+    '部署名',
+    '掲載媒体',
+    '当媒チェック',
+    '校閲チェック',
+    '変更反映状況',
+    '企画日時',
+    '企画場所',
+    '企画紹介文',
+    '企画ジャンル',
+    '整理券情報',
+    'ゲスト情報',
+    '備考',
+    '最終変更申請日時'
+  ];
+  const current = plain(context.APP_CONFIG.bureauOutputHeaders);
+  assert.deepEqual(current, expected);
+
+  const oldOrder = [
+    '企画名',
+    '内部向け企画・取り組み名',
+    '企画紹介文',
+    '掲載文字情報',
+    'ページ名',
+    '掲載媒体',
+    '担当者名',
+    '部署名',
+    '企画場所',
+    '企画日時',
+    '企画ジャンル',
+    '整理券情報',
+    'ゲスト情報',
+    '備考',
+    '当媒チェック',
+    '校閲チェック',
+    '変更反映状況',
+    '最終変更申請日時'
+  ];
+  const valuesByHeader = Object.fromEntries(oldOrder.map((header) => [header, '値:' + header]));
+  const migrated = plain(context.migratePreviousBureauRows_([
+    oldOrder,
+    oldOrder.map((header) => valuesByHeader[header])
+  ]));
+
+  assert.equal(context.headerSetMatches_(oldOrder, current), true);
+  assert.equal(context.headerOrderMatches_(oldOrder, current), false);
+  assert.deepEqual(migrated[0], current.map((header) => valuesByHeader[header]));
+});
+
 test('差分更新は手動列を保持し、原典変更時だけ確認状態を戻す', () => {
   const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
   const oldRecord = makeBureauRecord({ introduction: '旧原典' });
