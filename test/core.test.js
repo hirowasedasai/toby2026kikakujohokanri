@@ -205,7 +205,7 @@ test('変更申請2タブは自由記述をマスターへ自動反映しない'
   assert.equal(collected.issues.length, 0);
 });
 
-test('運スタ通常回答と変更申請を所属局ごとのタブへ振り分ける', () => {
+test('企画名で一意に照合した変更申請を企画情報へ自動反映する', () => {
   const staffFormSource = context.APP_CONFIG.sheets.inputs.find(
     (source) => source.type === 'STAFF_FORM'
   );
@@ -235,35 +235,131 @@ test('運スタ通常回答と変更申請を所属局ごとのタブへ振り�
     {
       values: [
         normalHeaders,
-        ['TIME-1', '合成担当者', '企画局', '合成部署', '合成企画', '=式にしない紹介文', '通常備考']
+        ['TIME-1', '合成担当者', '企画局', '合成部署', '合成企画', '変更前の紹介文', '通常備考']
       ],
       source: staffFormSource
     },
     {
       values: [
         changeHeaders,
-        ['TIME-2', '合成担当者', '企画局', '合成部署', '合成企画', '変更前本文', '変更後本文', '変更備考'],
-        ['TIME-3', '別担当者', '広報制作局', '広報部署', '広報企画', '', '変更後だけ', '']
+        [
+          'TIME-2',
+          '合成担当者',
+          '企画局',
+          '合成部署',
+          '合成企画',
+          '企画紹介文：「変更前の紹介文」',
+          '企画紹介文：「変更後の紹介文」',
+          '変更備考'
+        ]
       ],
       source: staffChangeSource
     }
   ]);
 
   const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
-  const typeIndex = headers.indexOf('受付種別');
   const introIndex = headers.indexOf('企画紹介文');
-  const beforeIndex = headers.indexOf('変更前');
-  const afterIndex = headers.indexOf('変更後');
-  const sourceRowIndex = headers.indexOf('入力行');
-  assert.equal(plan.rowsByBureau['企画局'].length, 2);
-  assert.equal(plan.rowsByBureau['広報制作局'].length, 1);
-  assert.equal(plan.rowsByBureau['企画局'][0][typeIndex], '企画情報');
-  assert.equal(plan.rowsByBureau['企画局'][0][introIndex], "'=式にしない紹介文");
-  assert.equal(plan.rowsByBureau['企画局'][1][typeIndex], '変更申請');
-  assert.equal(plan.rowsByBureau['企画局'][1][beforeIndex], '変更前本文');
-  assert.equal(plan.rowsByBureau['企画局'][1][afterIndex], '変更後本文');
-  assert.equal(plan.rowsByBureau['広報制作局'][0][sourceRowIndex], '3');
+  const statusIndex = headers.indexOf('変更反映状況');
+  const changedAtIndex = headers.indexOf('最終変更申請日時');
+  assert.equal(plan.rowsByBureau['企画局'].length, 1);
+  assert.equal(plan.rowsByBureau['企画局'][0][introIndex], '変更後の紹介文');
+  assert.equal(plan.rowsByBureau['企画局'][0][statusIndex], '自動反映済み');
+  assert.equal(plan.rowsByBureau['企画局'][0][changedAtIndex], 'TIME-2');
+  assert.equal(plan.appliedChanges, 1);
+  assert.equal(plan.reviews.length, 0);
   assert.equal(plan.issues.length, 0);
+});
+
+test('曖昧または不正な変更申請は上書きせず要手動確認へ回す', () => {
+  const staffFormSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_FORM'
+  );
+  const staffChangeSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_CHANGE'
+  );
+  const normalHeaders = ['タイムスタンプ', '担当者名', '所属局', '部署名', '企画名', '企画場所（正式名称）'];
+  const changeHeaders = ['タイムスタンプ', '担当者名', '所属局', '部署名', '企画名', '変更前', '変更後'];
+  const plan = context.buildBureauOutputPlan_([
+    {
+      values: [normalHeaders, ['TIME-1', '担当者', '開発局', '開発部署', '一意な企画', '旧場所']],
+      source: staffFormSource
+    },
+    {
+      values: [
+        changeHeaders,
+        ['TIME-2', '担当者', '開発局', '開発部署', '存在しない企画', '企画場所：「旧場所」', '企画場所：「新場所」'],
+        ['TIME-3', '担当者', '開発局', '開発部署', '一意な企画', '自由記述だけ', '企画場所：「新場所」'],
+        ['TIME-4', '担当者', '開発局', '開発部署', '一意な企画', '企画場所：「別の旧場所」', '企画場所：「新場所」']
+      ],
+      source: staffChangeSource
+    }
+  ]);
+
+  assert.equal(plan.appliedChanges, 0);
+  assert.equal(plan.reviews.length, 3);
+  assert.deepEqual(
+    plain(plan.issues).map((issue) => issue.code),
+    ['E_CHANGE_PROJECT_NOT_FOUND', 'E_CHANGE_FORMAT_INVALID', 'E_CHANGE_BEFORE_MISMATCH']
+  );
+  assert.equal(plan.rowsByBureau['開発局'].length, 1);
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  assert.equal(
+    plan.rowsByBureau['開発局'][0][headers.indexOf('企画場所')],
+    '旧場所'
+  );
+  assert.equal(
+    plan.rowsByBureau['開発局'][0][headers.indexOf('変更反映状況')],
+    '要手動確認'
+  );
+});
+
+test('同じ企画名の通常回答が複数ある変更申請は自動反映しない', () => {
+  const staffFormSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_FORM'
+  );
+  const staffChangeSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_CHANGE'
+  );
+  const normalHeaders = ['タイムスタンプ', '担当者名', '所属局', '部署名', '企画名', '企画場所（正式名称）'];
+  const changeHeaders = ['タイムスタンプ', '担当者名', '所属局', '部署名', '企画名', '変更前', '変更後'];
+  const plan = context.buildBureauOutputPlan_([
+    {
+      values: [
+        normalHeaders,
+        ['TIME-1', '担当者A', '企画局', '部署A', '重複企画', '場所A'],
+        ['TIME-2', '担当者B', '企画局', '部署B', '重複企画', '場所B']
+      ],
+      source: staffFormSource
+    },
+    {
+      values: [
+        changeHeaders,
+        ['TIME-3', '担当者A', '企画局', '部署A', '重複企画', '企画場所：「場所A」', '企画場所：「新場所」']
+      ],
+      source: staffChangeSource
+    }
+  ]);
+
+  assert.equal(plan.appliedChanges, 0);
+  assert.equal(plan.reviews.length, 1);
+  assert.equal(plain(plan.issues)[0].code, 'E_CHANGE_PROJECT_AMBIGUOUS');
+  const placeIndex = plain(context.APP_CONFIG.bureauOutputHeaders).indexOf('企画場所');
+  assert.deepEqual(
+    plain(plan.rowsByBureau['企画局']).map((row) => row[placeIndex]),
+    ['場所A', '場所B']
+  );
+});
+
+test('要手動確認は対応済みを除いて未対応件数を数える', () => {
+  const headers = plain(context.APP_CONFIG.manualReviewHeaders);
+  const statusIndex = headers.indexOf('対応状況');
+  const pending = new Array(headers.length).fill('');
+  const resolved = new Array(headers.length).fill('');
+  pending[0] = 'source:2';
+  pending[statusIndex] = '未対応';
+  resolved[0] = 'source:3';
+  resolved[statusIndex] = '対応済み';
+  assert.equal(context.pendingManualReviewCountFromValues_([headers, pending, resolved]), 1);
 });
 
 test('局別タブは9選択肢に対応し、不明な所属局の行だけをスキップする', () => {

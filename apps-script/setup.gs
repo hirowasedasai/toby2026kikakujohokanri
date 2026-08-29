@@ -10,6 +10,21 @@ function ensureSchemaSheet_(spreadsheet, sheetName, headers) {
   validateExactHeaders_(sheet, headers, 'E_EXISTING_SCHEMA_MISMATCH');
 }
 
+function ensureBureauSchemaSheet_(spreadsheet, sheetName) {
+  var sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) sheet = spreadsheet.insertSheet(sheetName);
+  var values = readSheetValues_(sheet);
+  if (
+    values.length === 0 ||
+    isBlankRow_(values[0]) ||
+    headerSetMatches_(values[0], APP_CONFIG.legacyBureauOutputHeaders)
+  ) {
+    writeGeneratedHeaders_(sheet, APP_CONFIG.bureauOutputHeaders);
+    return;
+  }
+  validateExactHeaders_(sheet, APP_CONFIG.bureauOutputHeaders, 'E_EXISTING_SCHEMA_MISMATCH');
+}
+
 function setupSchemaInternal_() {
   var spreadsheet = getBoundSpreadsheet_();
   validateEnvironment_(spreadsheet);
@@ -21,8 +36,13 @@ function setupSchemaInternal_() {
   );
   ensureSchemaSheet_(spreadsheet, APP_CONFIG.sheets.foodOutput, APP_CONFIG.foodOutputHeaders);
   APP_CONFIG.sheets.bureauOutputs.forEach(function (output) {
-    ensureSchemaSheet_(spreadsheet, output.name, APP_CONFIG.bureauOutputHeaders);
+    ensureBureauSchemaSheet_(spreadsheet, output.name);
   });
+  ensureSchemaSheet_(
+    spreadsheet,
+    APP_CONFIG.sheets.manualReview,
+    APP_CONFIG.manualReviewHeaders
+  );
   ensureSchemaSheet_(spreadsheet, APP_CONFIG.sheets.log, APP_CONFIG.logHeaders);
 }
 
@@ -31,7 +51,7 @@ function setupStagingSchema() {
   setupSchemaInternal_();
   SpreadsheetApp.getUi().alert(
     'stagingスキーマ作成完了',
-    'マスター、出力、局別タブ、ログのスキーマを確認しました。入力タブは作成・変更していません。',
+    'マスター、出力、局別タブ、要手動確認、ログのスキーマを確認しました。入力タブは作成・変更していません。',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -60,7 +80,7 @@ function setupProductionSchema() {
   setupSchemaInternal_();
   ui.alert(
     'productionスキーマ作成完了',
-    'マスター、出力、局別タブ、ログのスキーマを確認しました。入力タブは作成・変更していません。',
+    'マスター、出力、局別タブ、要手動確認、ログのスキーマを確認しました。入力タブは作成・変更していません。',
     ui.ButtonSet.OK
   );
 }

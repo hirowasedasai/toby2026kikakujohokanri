@@ -39,6 +39,7 @@ var APP_CONFIG = Object.freeze({
       Object.freeze({ bureau: '財務局', name: '26財務局' }),
       Object.freeze({ bureau: '超局PJ', name: '26超局PJ' })
     ]),
+    manualReview: '26要手動確認',
     log: '26処理ログ'
   }),
   properties: Object.freeze({
@@ -83,6 +84,20 @@ var APP_CONFIG = Object.freeze({
     '要確認'
   ]),
   bureauOutputHeaders: Object.freeze([
+    '企画名',
+    '企画紹介文',
+    '担当者名',
+    '部署名',
+    '企画場所',
+    '企画日時',
+    '企画ジャンル',
+    '整理券情報',
+    'ゲスト情報',
+    '備考',
+    '変更反映状況',
+    '最終変更申請日時'
+  ]),
+  legacyBureauOutputHeaders: Object.freeze([
     '受付種別',
     '回答日時',
     '所属局',
@@ -112,6 +127,22 @@ var APP_CONFIG = Object.freeze({
     '備考',
     '入力タブ',
     '入力行'
+  ]),
+  manualReviewHeaders: Object.freeze([
+    '確認キー',
+    '受付日時',
+    '所属局',
+    '部署名',
+    '企画名',
+    '担当者名',
+    '要確認理由',
+    '変更前',
+    '変更後',
+    '変更前画像',
+    '変更後画像',
+    '入力タブ',
+    '入力行',
+    '対応状況'
   ]),
   logHeaders: Object.freeze([
     '実行ID',
@@ -200,6 +231,30 @@ var APP_CONFIG = Object.freeze({
     afterImage: Object.freeze(['変更後（画像の場合はこちらに提出してください）']),
     notes: Object.freeze(['備考'])
   }),
+  staffChangeFields: Object.freeze([
+    Object.freeze({ field: 'projectName', labels: Object.freeze(['企画名', '外部向け企画・取り組み名']) }),
+    Object.freeze({ field: 'introduction', labels: Object.freeze(['企画紹介文', '企画紹介文（75字以内）', '掲載文字情報']) }),
+    Object.freeze({ field: 'staffName', labels: Object.freeze(['担当者名', '責任者名']) }),
+    Object.freeze({ field: 'bureau', labels: Object.freeze(['所属局']) }),
+    Object.freeze({ field: 'department', labels: Object.freeze(['部署名', '部署名（チーム、PJなど）', 'チーム・班']) }),
+    Object.freeze({ field: 'place', labels: Object.freeze(['企画場所', '企画場所（正式名称）']) }),
+    Object.freeze({ field: 'scheduleOverride', labels: Object.freeze(['企画時間', '企画日時', '企画実施日']) }),
+    Object.freeze({ field: 'firstDayStart', labels: Object.freeze(['11月7日(土)企画開始時間']) }),
+    Object.freeze({ field: 'firstDayEnd', labels: Object.freeze(['11月7日(土)企画終了時間']) }),
+    Object.freeze({ field: 'secondDayStart', labels: Object.freeze(['11月8日(日)企画開始時間']) }),
+    Object.freeze({ field: 'secondDayEnd', labels: Object.freeze(['11月8日(日)企画終了時間']) }),
+    Object.freeze({ field: 'otherSchedule', labels: Object.freeze(['その他企画日時', '当日企画でない場合は、企画日時を詳細に記入してください。']) }),
+    Object.freeze({ field: 'genres', labels: Object.freeze(['企画ジャンル']) }),
+    Object.freeze({ field: 'mainGenre', labels: Object.freeze(['企画ジャンル(メイン)', '企画ジャンル（メイン）']) }),
+    Object.freeze({ field: 'ticketDistribution', labels: Object.freeze(['整理券配布', '整理券（無料チケット）配布']) }),
+    Object.freeze({ field: 'ticketDetails', labels: Object.freeze(['整理券配布詳細']) }),
+    Object.freeze({ field: 'guest', labels: Object.freeze(['ゲスト']) }),
+    Object.freeze({ field: 'guestName', labels: Object.freeze(['ゲスト名']) }),
+    Object.freeze({ field: 'guestKana', labels: Object.freeze(['ゲスト名 フリガナ']) }),
+    Object.freeze({ field: 'guestTitle', labels: Object.freeze(['ゲスト肩書き']) }),
+    Object.freeze({ field: 'guestPublication', labels: Object.freeze(['ゲスト名の公表']) }),
+    Object.freeze({ field: 'notes', labels: Object.freeze(['備考']) })
+  ]),
   requiredInputFields: Object.freeze([
     'email',
     'participation',

@@ -10,9 +10,11 @@ function onOpen() {
     .addItem('局別タブを更新', 'buildBureauOutputs')
     .addItem('全処理を実行', 'runAll')
     .addSeparator()
+    .addItem('要手動確認を開く', 'openManualReview')
     .addItem('処理ログを開く', 'openProcessLog')
     .addItem('環境情報を表示', 'showEnvironmentInfo')
     .addToUi();
+  showPendingManualReviewToast_();
 }
 
 function runAll() {
@@ -35,7 +37,7 @@ function runAll() {
         created: syncSummary.created,
         updated: syncSummary.updated,
         skipped: syncSummary.skipped,
-        needsReview: syncSummary.needsReview,
+        needsReview: syncSummary.needsReview + bureauSummary.needsReview,
         errors: syncSummary.errors + participantSummary.errors + foodSummary.errors + bureauSummary.errors
       };
     });

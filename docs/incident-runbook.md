@@ -22,6 +22,11 @@
 | `E_MASTER_DUPLICATE_ID` | 管理IDの重複行を権限者二名で確認し、通常同期で自動修復しない |
 | `E_PROVISIONAL_KEY_COLLISION` | 要確認行とフォーム原本を権限者だけで照合する |
 | `E_OUTPUT_EMPTY_GUARD` | マスターの同期状態・要確認件数を確認。既存出力は維持される |
+| `E_CHANGE_PROJECT_NOT_FOUND` / `E_CHANGE_PROJECT_AMBIGUOUS` | `26要手動確認`で企画名と通常回答の重複・表記を確認。曖昧一致で上書きしない |
+| `E_CHANGE_FORMAT_INVALID` / `E_CHANGE_FIELDS_MISMATCH` | 変更前後が`項目名：「内容」`形式で、同じ項目集合かを回答原本で確認する |
+| `E_CHANGE_BEFORE_MISMATCH` | 通常回答の現在値と変更前を照合し、先行変更や転記差異を人力確認する |
+| `E_CHANGE_BUREAU_MISMATCH` / `E_CHANGE_DEPARTMENT_MISMATCH` | 所属局・部署名を回答原本で確認し、自動上書きしない |
+| `E_CHANGE_IMAGE_REVIEW_REQUIRED` | 画像変更を`26要手動確認`で人力確認する |
 | `E_LOCK_TIMEOUT` | 重複実行や長時間実行を確認し、時間を置く |
 
 ## 復旧

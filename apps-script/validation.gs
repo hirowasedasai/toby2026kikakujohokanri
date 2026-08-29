@@ -221,6 +221,11 @@ function preflightInternal_(options) {
       validation.bureau = output.bureau;
       return validation;
     });
+    result.manualReview = validateExactHeaders_(
+      requireSheet_(spreadsheet, APP_CONFIG.sheets.manualReview),
+      APP_CONFIG.manualReviewHeaders,
+      'E_MANUAL_REVIEW_HEADER_MISSING'
+    );
   }
   if (options.log) {
     result.log = validateExactHeaders_(
