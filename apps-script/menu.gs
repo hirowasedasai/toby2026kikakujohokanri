@@ -7,6 +7,7 @@ function onOpen() {
     .addItem('フォーム回答を同期', 'syncMaster')
     .addItem('参参一覧を更新', 'buildParticipantList')
     .addItem('屋台情報まとめを更新', 'buildFoodStallSummary')
+    .addItem('局別タブを更新', 'buildBureauOutputs')
     .addItem('全処理を実行', 'runAll')
     .addSeparator()
     .addItem('処理ログを開く', 'openProcessLog')
@@ -18,17 +19,24 @@ function runAll() {
   var executionId = newExecutionId_();
   try {
     var result = withScriptLock_(function () {
-      var preflight = preflightInternal_({ inputs: true, master: true, outputs: true, log: true });
+      var preflight = preflightInternal_({
+        inputs: true,
+        master: true,
+        outputs: true,
+        bureaus: true,
+        log: true
+      });
       var syncSummary = performSyncMaster_(false, preflight, executionId);
       var participantSummary = performBuildOutput_('participant', preflight, executionId);
       var foodSummary = performBuildOutput_('food', preflight, executionId);
+      var bureauSummary = performBuildBureauOutputs_(preflight, executionId);
       return {
         executionId: executionId,
         created: syncSummary.created,
         updated: syncSummary.updated,
         skipped: syncSummary.skipped,
         needsReview: syncSummary.needsReview,
-        errors: syncSummary.errors + participantSummary.errors + foodSummary.errors
+        errors: syncSummary.errors + participantSummary.errors + foodSummary.errors + bureauSummary.errors
       };
     });
     showSummary_('全処理完了', result);

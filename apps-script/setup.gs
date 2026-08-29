@@ -20,6 +20,9 @@ function setupSchemaInternal_() {
     APP_CONFIG.participantOutputHeaders
   );
   ensureSchemaSheet_(spreadsheet, APP_CONFIG.sheets.foodOutput, APP_CONFIG.foodOutputHeaders);
+  APP_CONFIG.sheets.bureauOutputs.forEach(function (output) {
+    ensureSchemaSheet_(spreadsheet, output.name, APP_CONFIG.bureauOutputHeaders);
+  });
   ensureSchemaSheet_(spreadsheet, APP_CONFIG.sheets.log, APP_CONFIG.logHeaders);
 }
 
@@ -28,7 +31,7 @@ function setupStagingSchema() {
   setupSchemaInternal_();
   SpreadsheetApp.getUi().alert(
     'stagingスキーマ作成完了',
-    'マスター、出力、ログのスキーマを確認しました。入力タブは作成・変更していません。',
+    'マスター、出力、局別タブ、ログのスキーマを確認しました。入力タブは作成・変更していません。',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -57,7 +60,7 @@ function setupProductionSchema() {
   setupSchemaInternal_();
   ui.alert(
     'productionスキーマ作成完了',
-    'マスター、出力、ログのスキーマを確認しました。入力タブは作成・変更していません。',
+    'マスター、出力、局別タブ、ログのスキーマを確認しました。入力タブは作成・変更していません。',
     ui.ButtonSet.OK
   );
 }

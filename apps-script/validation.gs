@@ -211,6 +211,17 @@ function preflightInternal_(options) {
       'E_OUTPUT_HEADER_MISSING'
     );
   }
+  if (options.bureaus) {
+    result.bureauOutputs = APP_CONFIG.sheets.bureauOutputs.map(function (output) {
+      var validation = validateExactHeaders_(
+        requireSheet_(spreadsheet, output.name),
+        APP_CONFIG.bureauOutputHeaders,
+        'E_BUREAU_OUTPUT_HEADER_MISSING'
+      );
+      validation.bureau = output.bureau;
+      return validation;
+    });
+  }
   if (options.log) {
     result.log = validateExactHeaders_(
       requireSheet_(spreadsheet, APP_CONFIG.sheets.log),
@@ -224,7 +235,13 @@ function preflightInternal_(options) {
 function preflightCheck() {
   var executionId = newExecutionId_();
   try {
-    var result = preflightInternal_({ inputs: true, master: true, outputs: true, log: true });
+    var result = preflightInternal_({
+      inputs: true,
+      master: true,
+      outputs: true,
+      bureaus: true,
+      log: true
+    });
     SpreadsheetApp.getUi().alert(
       '事前チェック完了',
       '環境: ' + result.settings.environment + '\n実行ID: ' + executionId + '\n必要なタブとヘッダーは正常です。',

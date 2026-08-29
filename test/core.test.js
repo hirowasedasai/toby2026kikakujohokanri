@@ -37,7 +37,8 @@ for (const file of [
   'validation.gs',
   'logger.gs',
   'syncMaster.gs',
-  'buildOutputs.gs'
+  'buildOutputs.gs',
+  'buildBureauOutputs.gs'
 ]) {
   const source = await readFile(path.join(repoRoot, 'apps-script', file), 'utf8');
   vm.runInContext(source, context, { filename: file });
@@ -202,6 +203,93 @@ test('変更申請2タブは自由記述をマスターへ自動反映しない'
   assert.equal(collected.records.length, 0);
   assert.equal(collected.skipped, 0);
   assert.equal(collected.issues.length, 0);
+});
+
+test('運スタ通常回答と変更申請を所属局ごとのタブへ振り分ける', () => {
+  const staffFormSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_FORM'
+  );
+  const staffChangeSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_CHANGE'
+  );
+  const normalHeaders = [
+    'タイムスタンプ',
+    '担当者名',
+    '所属局',
+    '部署名（チーム、PJなど）',
+    '企画名（26字以内）',
+    '企画紹介文（75字以内）',
+    '備考'
+  ];
+  const changeHeaders = [
+    'タイムスタンプ',
+    '担当者名',
+    '所属局',
+    '部署名（チーム、PJなど）',
+    '企画名',
+    '変更前',
+    '変更後',
+    '備考'
+  ];
+  const plan = context.buildBureauOutputPlan_([
+    {
+      values: [
+        normalHeaders,
+        ['TIME-1', '合成担当者', '企画局', '合成部署', '合成企画', '=式にしない紹介文', '通常備考']
+      ],
+      source: staffFormSource
+    },
+    {
+      values: [
+        changeHeaders,
+        ['TIME-2', '合成担当者', '企画局', '合成部署', '合成企画', '変更前本文', '変更後本文', '変更備考'],
+        ['TIME-3', '別担当者', '広報制作局', '広報部署', '広報企画', '', '変更後だけ', '']
+      ],
+      source: staffChangeSource
+    }
+  ]);
+
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const typeIndex = headers.indexOf('受付種別');
+  const introIndex = headers.indexOf('企画紹介文');
+  const beforeIndex = headers.indexOf('変更前');
+  const afterIndex = headers.indexOf('変更後');
+  const sourceRowIndex = headers.indexOf('入力行');
+  assert.equal(plan.rowsByBureau['企画局'].length, 2);
+  assert.equal(plan.rowsByBureau['広報制作局'].length, 1);
+  assert.equal(plan.rowsByBureau['企画局'][0][typeIndex], '企画情報');
+  assert.equal(plan.rowsByBureau['企画局'][0][introIndex], "'=式にしない紹介文");
+  assert.equal(plan.rowsByBureau['企画局'][1][typeIndex], '変更申請');
+  assert.equal(plan.rowsByBureau['企画局'][1][beforeIndex], '変更前本文');
+  assert.equal(plan.rowsByBureau['企画局'][1][afterIndex], '変更後本文');
+  assert.equal(plan.rowsByBureau['広報制作局'][0][sourceRowIndex], '3');
+  assert.equal(plan.issues.length, 0);
+});
+
+test('局別タブは9選択肢に対応し、不明な所属局の行だけをスキップする', () => {
+  const staffFormSource = context.APP_CONFIG.sheets.inputs.find(
+    (source) => source.type === 'STAFF_FORM'
+  );
+  assert.deepEqual(
+    plain(context.APP_CONFIG.sheets.bureauOutputs).map((output) => output.bureau),
+    ['会場整備局', '参加対応局', '開発局', '企画局', '広報制作局', '渉外局', '総務局', '財務局', '超局PJ']
+  );
+  assert.equal(
+    plain(context.APP_CONFIG.sheets.bureauOutputs).some((output) => output.name === 'はじめに'),
+    false
+  );
+
+  const plan = context.buildBureauOutputPlan_([{
+    values: [
+      ['タイムスタンプ', '担当者名', '所属局', '部署名', '企画名'],
+      ['TIME', '合成担当者', '未登録局', '合成部署', '合成企画']
+    ],
+    source: staffFormSource
+  }]);
+  assert.equal(plan.skipped, 1);
+  assert.equal(plan.issues.length, 1);
+  assert.equal(plan.issues[0].code, 'E_BUREAU_VALUE_INVALID');
+  assert.equal(plan.issues[0].rowNumber, 2);
 });
 
 test('優先候補列が空なら同じ論理項目の次候補を行ごとに使う', () => {

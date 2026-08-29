@@ -47,11 +47,25 @@ function uninstallTriggers() {
   );
 }
 
-function runTriggeredSync_(operation) {
+function runTriggeredSync_(operation, includeBureauOutputs) {
   var executionId = newExecutionId_();
   try {
     return withScriptLock_(function () {
-      return performSyncMaster_(false, null, executionId);
+      var syncSummary = performSyncMaster_(false, null, executionId);
+      if (includeBureauOutputs) performBuildBureauOutputs_(null, executionId);
+      return syncSummary;
+    });
+  } catch (error) {
+    safeAppendFailureLog_(operation, executionId, error);
+    throw error;
+  }
+}
+
+function runTriggeredBureauOutputs_(operation) {
+  var executionId = newExecutionId_();
+  try {
+    return withScriptLock_(function () {
+      return performBuildBureauOutputs_(null, executionId);
     });
   } catch (error) {
     safeAppendFailureLog_(operation, executionId, error);
@@ -64,12 +78,17 @@ function handleFormSubmit_(event) {
   var source = APP_CONFIG.sheets.inputs.find(function (candidate) {
     return candidate.name === sheetName;
   });
-  if (!source || source.syncToMaster === false) return;
-  runTriggeredSync_('trigger:formSubmit');
+  if (!source) return;
+  if (source.type === 'STAFF_CHANGE') {
+    runTriggeredBureauOutputs_('trigger:staffChangeBureauOutput');
+    return;
+  }
+  if (source.syncToMaster === false) return;
+  runTriggeredSync_('trigger:formSubmit', source.type === 'STAFF_FORM');
 }
 
 function scheduledSyncMaster_() {
   var settings = getScriptSettings_();
   if (!settings.scheduledSyncEnabled) return;
-  runTriggeredSync_('trigger:scheduledSync');
+  runTriggeredSync_('trigger:scheduledSync', true);
 }
