@@ -28,10 +28,6 @@ function safeBureauOutputCell_(value) {
   return normalizeText_(text).indexOf('=') === 0 ? "'" + text : text;
 }
 
-function normalizeProjectNameKey_(value) {
-  return normalizeText_(value).replace(/[\s\u3000]+/g, ' ').toLowerCase();
-}
-
 function normalizeChangeValue_(value) {
   if (value instanceof Date) {
     return Utilities.formatDate(value, APP_CONFIG.timeZone, 'HH:mm');

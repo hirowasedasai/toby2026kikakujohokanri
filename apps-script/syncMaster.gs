@@ -115,7 +115,7 @@ function collectInputRecords_(inputBatches) {
 
       record.key = record.officialId
         ? buildOfficialKey_(record.officialId)
-        : buildProvisionalKey_(record.email, record.participation);
+        : buildProvisionalKey_(record.email, record.participation, record.projectName);
       record.keyType = record.officialId ? 'official' : 'provisional';
       records.push(record);
     });
@@ -128,15 +128,16 @@ function masterRecordFromRow_(row, index, rowNumber) {
   var managementId = normalizeText_(row[index[normalizeHeader_('管理ID')]]);
   var email = normalizeEmail_(row[index[normalizeHeader_('メールアドレス')]]);
   var participation = normalizeText_(row[index[normalizeHeader_('参加企画')]]);
+  var projectName = normalizeText_(row[index[normalizeHeader_('企画名')]]);
   var key = managementId.indexOf(APP_CONFIG.provisionalIdPrefix) === 0
-    ? buildProvisionalKey_(email, participation)
+    ? buildProvisionalKey_(email, participation, projectName)
     : buildOfficialKey_(managementId);
   return {
     managementId: managementId,
     email: email,
     participation: participation,
     organization: normalizeText_(row[index[normalizeHeader_('団体名')]]),
-    projectName: normalizeText_(row[index[normalizeHeader_('企画名')]]),
+    projectName: projectName,
     row: row,
     rowNumber: rowNumber,
     key: key,
@@ -218,6 +219,8 @@ function updateExistingMasterRow_(masterRecord, index, record, currentIso) {
       changed = true;
     }
   });
+  var reviewReason = normalizeText_(getMasterCell_(masterRecord.row, index, '要確認理由'));
+  if (reviewReason.indexOf('暫定キー衝突:') === 0) changed = true;
   if (changed) {
     setMasterCell_(masterRecord.row, index, '同期ステータス', '同期済み');
     setMasterCell_(masterRecord.row, index, '最終更新日時', currentIso);
@@ -230,14 +233,13 @@ function updateExistingMasterRow_(masterRecord, index, record, currentIso) {
 function findSuspectedKeyChanges_(record, masterRecords) {
   return masterRecords.filter(function (masterRecord) {
     if (masterRecord.key === record.key) return false;
-    var sameEmail = masterRecord.email && masterRecord.email === record.email;
     var sameParticipation =
       masterRecord.participation && masterRecord.participation === record.participation;
     var samePublishedIdentity =
       sameParticipation &&
       masterRecord.organization === record.organization &&
       masterRecord.projectName === record.projectName;
-    return sameEmail || (samePublishedIdentity && masterRecord.keyType === 'provisional');
+    return samePublishedIdentity && masterRecord.keyType === 'provisional';
   });
 }
 
@@ -346,7 +348,7 @@ function planMasterUpsert_(masterHeaders, masterRows, inputBatches, currentIso) 
         makeIssue_('WARN', 'E_PROVISIONAL_KEY_COLLISION', collisionReason, {
           sourceSheet: record.sourceSheet,
           rowNumber: record.rowNumber,
-          columnName: 'メールアドレス,参加企画'
+          columnName: 'メールアドレス,参加企画,企画名'
         })
       );
       return;

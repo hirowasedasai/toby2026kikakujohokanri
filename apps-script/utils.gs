@@ -11,6 +11,10 @@ function normalizeHeader_(value) {
   return normalizeText_(value).replace(/[\s\u3000]+/g, '').toLowerCase();
 }
 
+function normalizeProjectNameKey_(value) {
+  return normalizeText_(value).replace(/[\s\u3000]+/g, ' ').toLowerCase();
+}
+
 function stringifyCell_(value) {
   if (value instanceof Date) {
     return Utilities.formatDate(value, APP_CONFIG.timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
@@ -37,11 +41,12 @@ function hashString_(value) {
   return (hash >>> 0).toString(36).toUpperCase().padStart(7, '0');
 }
 
-function buildProvisionalKey_(email, participation) {
+function buildProvisionalKey_(email, participation, projectName) {
   var normalizedEmail = normalizeEmail_(email);
   var normalizedParticipation = normalizeText_(participation);
-  if (!normalizedEmail || !normalizedParticipation) return '';
-  return 'provisional:' + normalizedEmail + '|' + normalizedParticipation;
+  var normalizedProjectName = normalizeProjectNameKey_(projectName);
+  if (!normalizedEmail || !normalizedParticipation || !normalizedProjectName) return '';
+  return 'provisional:' + normalizedEmail + '|' + normalizedParticipation + '|' + normalizedProjectName;
 }
 
 function buildOfficialKey_(officialId) {

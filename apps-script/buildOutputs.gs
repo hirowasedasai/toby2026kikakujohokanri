@@ -105,10 +105,23 @@ function setParticipantTrackerCell_(row, index, header, value) {
   if (column !== undefined) row[column] = value;
 }
 
+function participantBaseKey_(email, participation) {
+  var normalizedEmail = normalizeEmail_(email);
+  var normalizedParticipation = normalizeText_(participation);
+  if (!normalizedEmail || !normalizedParticipation) return '';
+  return 'participant-base:' + normalizedEmail + '|' + normalizedParticipation;
+}
+
+function participantProjectNameFromRow_(row, index) {
+  return participantTrackerCell_(row, index, '企画名・フォーム回答') ||
+    participantTrackerCell_(row, index, '企画名・確定版');
+}
+
 function participantTrackerKeyFromRow_(row, index) {
   return buildProvisionalKey_(
     participantTrackerCell_(row, index, 'メールアドレス'),
-    participantTrackerCell_(row, index, '参加企画')
+    participantTrackerCell_(row, index, '参加企画'),
+    participantProjectNameFromRow_(row, index)
   );
 }
 
@@ -121,15 +134,23 @@ function participantResponseGroups_(inputBatches) {
   }
   var collected = collectInputRecords_([batch]);
   var groups = {};
+  var keysByBase = {};
   collected.records.forEach(function (record) {
-    var key = buildProvisionalKey_(record.email, record.participation);
+    var key = buildProvisionalKey_(record.email, record.participation, record.projectName);
     if (!key) return;
     if (!groups[key]) groups[key] = [];
     groups[key].push(record);
+    var baseKey = participantBaseKey_(record.email, record.participation);
+    if (!keysByBase[baseKey]) keysByBase[baseKey] = [];
+    if (keysByBase[baseKey].indexOf(key) < 0) keysByBase[baseKey].push(key);
+  });
+  Object.keys(keysByBase).forEach(function (baseKey) {
+    keysByBase[baseKey].sort();
   });
   return {
     batch: batch,
     groups: groups,
+    keysByBase: keysByBase,
     issues: collected.issues.slice(),
     skipped: collected.skipped
   };
@@ -213,7 +234,17 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
   var existing = trackerValues.slice(1).map(function (row, offset) {
     var copy = row.slice(0, headers.length);
     while (copy.length < headers.length) copy.push('');
-    return { row: copy, rowNumber: offset + 2, key: participantTrackerKeyFromRow_(copy, index) };
+    return {
+      row: copy,
+      rowNumber: offset + 2,
+      key: participantTrackerKeyFromRow_(copy, index),
+      baseKey: participantBaseKey_(
+        participantTrackerCell_(copy, index, 'メールアドレス'),
+        participantTrackerCell_(copy, index, '参加企画')
+      ),
+      result: normalizeText_(participantTrackerCell_(copy, index, '照合結果')),
+      legacyPlaceholder: false
+    };
   }).filter(function (record) {
     return !isBlankRow_(record.row);
   });
@@ -222,6 +253,23 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
     if (!record.key) return;
     if (!existingByKey[record.key]) existingByKey[record.key] = [];
     existingByKey[record.key].push(record);
+  });
+
+  var claimedLegacyKeys = {};
+  existing.forEach(function (record) {
+    if (
+      record.key ||
+      record.result !== 'フォーム回答重複' ||
+      !record.baseKey
+    ) return;
+    var candidates = (responsePlan.keysByBase[record.baseKey] || []).filter(function (key) {
+      return !existingByKey[key] && !claimedLegacyKeys[key];
+    });
+    if (candidates.length === 0) return;
+    record.key = candidates[0];
+    record.legacyPlaceholder = true;
+    claimedLegacyKeys[record.key] = true;
+    existingByKey[record.key] = [record];
   });
 
   var updates = [];
@@ -247,9 +295,9 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       needsReview += 1;
       issues.push(participantIssue_(
         'E_PARTICIPANT_TRACKER_ROW_INVALID',
-        '参参一覧の参加企画またはメールアドレスが空です。',
+        '参参一覧のメールアドレス、参加企画、または企画名が空です。',
         record.rowNumber,
-        '参加企画,メールアドレス'
+        'メールアドレス,参加企画,企画名'
       ));
       return;
     }
@@ -258,9 +306,9 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       needsReview += 1;
       issues.push(participantIssue_(
         'E_PARTICIPANT_TRACKER_DUPLICATE',
-        '参参一覧に同じメールアドレスと参加企画の行が複数あります。',
+        '参参一覧に同じメールアドレス、参加企画、企画名の行が複数あります。',
         record.rowNumber,
-        'メールアドレス,参加企画'
+        'メールアドレス,参加企画,企画名'
       ));
       return;
     }
@@ -276,12 +324,18 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       skipped += responses.length - 1;
       issues.push(participantIssue_(
         'E_PARTICIPANT_FORM_DUPLICATE',
-        '同じメールアドレスと参加企画のフォーム回答が複数あるため自動採用しません。',
+        '同じメールアドレス、参加企画、企画名のフォーム回答が複数あるため自動採用しません。',
         responses[0].rowNumber,
-        'メールアドレス,参加企画',
+        'メールアドレス,参加企画,企画名',
         responsePlan.batch.source.name
       ));
       return;
+    }
+    if (
+      record.legacyPlaceholder &&
+      normalizeText_(participantTrackerCell_(record.row, index, '提出状況')) === '確認中'
+    ) {
+      setParticipantTrackerCell_(record.row, index, '提出状況', '');
     }
     planExistingUpdate(record, responses[0], '一致');
   });
@@ -307,9 +361,9 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       skipped += responses.length - 1;
       issues.push(participantIssue_(
         'E_PARTICIPANT_FORM_DUPLICATE',
-        '同じメールアドレスと参加企画のフォーム回答が複数あるため自動採用しません。',
+        '同じメールアドレス、参加企画、企画名のフォーム回答が複数あるため自動採用しません。',
         first.rowNumber,
-        'メールアドレス,参加企画',
+        'メールアドレス,参加企画,企画名',
         responsePlan.batch.source.name
       ));
     }

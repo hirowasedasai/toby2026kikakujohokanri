@@ -262,12 +262,14 @@ test('参参フォームの実ヘッダーを列番号に依存せず解決す�
   assert.equal(collected.records[1].imageLink, '飲食画像');
 });
 
-test('参参一覧はメールと参加企画でフォーム回答を照合して差分更新する', () => {
+test('参参一覧はメール・参加企画・企画名でフォーム回答を照合して差分更新する', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
   const existing = new Array(headers.length).fill('');
   existing[headers.indexOf('参加企画')] = '教室企画';
   existing[headers.indexOf('提出状況')] = '未提出';
   existing[headers.indexOf('メールアドレス')] = 'participant@example.com';
+  existing[headers.indexOf('企画名・フォーム回答')] = '合成企画';
+  existing[headers.indexOf('企画名・確定版')] = '合成企画';
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [['participant@example.com', '教室企画', '合成参加団体', '合成企画']]
@@ -333,6 +335,8 @@ test('参参名はフォーム回答を確定版として既存行と新規行�
   existing[headers.indexOf('参加企画')] = '教室企画';
   existing[headers.indexOf('提出状況')] = '未提出';
   existing[headers.indexOf('メールアドレス')] = 'existing@example.com';
+  existing[headers.indexOf('企画名・フォーム回答')] = '確定企画';
+  existing[headers.indexOf('企画名・確定版')] = '確定企画';
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [
@@ -367,16 +371,18 @@ test('参参名はフォーム回答を確定版として既存行と新規行�
   assert.deepEqual(delta.issues, []);
 });
 
-test('参参一覧は未提出行を保持し、重複回答を一意に決めない', () => {
+test('参参一覧は同じ提出者の別企画を別行として扱う', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
   const unsubmitted = new Array(headers.length).fill('');
   unsubmitted[headers.indexOf('参加企画')] = '教室企画';
   unsubmitted[headers.indexOf('メールアドレス')] = 'waiting@example.com';
+  unsubmitted[headers.indexOf('企画名・フォーム回答')] = '未提出企画';
+  unsubmitted[headers.indexOf('企画名・確定版')] = '未提出企画';
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [
-      ['duplicate@example.com', '教室企画', '重複団体A', '重複企画A'],
-      ['duplicate@example.com', '教室企画', '重複団体B', '重複企画B']
+      ['multiple@example.com', '教室企画', '同一団体', '企画A'],
+      ['multiple@example.com', '教室企画', '同一団体', '企画B']
     ]
   );
 
@@ -386,16 +392,74 @@ test('参参一覧は未提出行を保持し、重複回答を一意に決め�
     'TIME'
   ));
   const waiting = delta.updates[0].row;
-  const duplicate = delta.appends[0];
 
   assert.equal(waiting[headers.indexOf('提出状況')], '未提出');
   assert.equal(waiting[headers.indexOf('照合結果')], '未提出');
+  assert.equal(delta.appends.length, 2);
+  assert.deepEqual(
+    delta.appends.map((row) => row[headers.indexOf('企画名・確定版')]).sort(),
+    ['企画A', '企画B']
+  );
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('提出状況')] === '提出済み'
+  ), true);
+  assert.equal(delta.summary.needsReview, 0);
+  assert.deepEqual(delta.issues, []);
+});
+
+test('参参一覧は同じ提出者・参加企画・企画名の複数回答だけを重複にする', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['duplicate@example.com', '教室企画', '重複団体A', '同一企画'],
+      ['duplicate@example.com', '教室企画', '重複団体B', '同一企画']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+  const duplicate = delta.appends[0];
+
   assert.equal(duplicate[headers.indexOf('提出状況')], '確認中');
   assert.equal(duplicate[headers.indexOf('参参名・フォーム回答')], '');
   assert.equal(duplicate[headers.indexOf('企画名・フォーム回答')], '');
   assert.equal(duplicate[headers.indexOf('照合結果')], 'フォーム回答重複');
   assert.equal(delta.summary.needsReview, 1);
   assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
+});
+
+test('旧フォーム回答重複行は1企画目へ再利用し、別企画を追加する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const placeholder = new Array(headers.length).fill('');
+  placeholder[headers.indexOf('参加企画')] = '飲食物販売企画';
+  placeholder[headers.indexOf('提出状況')] = '確認中';
+  placeholder[headers.indexOf('メールアドレス')] = 'legacy-multiple@example.com';
+  placeholder[headers.indexOf('照合結果')] = 'フォーム回答重複';
+  placeholder[headers.indexOf('最終同期日時')] = 'OLD-TIME';
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['legacy-multiple@example.com', '飲食物販売企画', '同一団体', '飲食企画A'],
+      ['legacy-multiple@example.com', '飲食物販売企画', '同一団体', '飲食企画B']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, placeholder],
+    [batch],
+    'TIME'
+  ));
+  const projects = [delta.updates[0].row, delta.appends[0]].map(
+    (row) => row[headers.indexOf('企画名・確定版')]
+  ).sort();
+
+  assert.equal(delta.summary.created, 1);
+  assert.equal(delta.summary.updated, 1);
+  assert.equal(delta.summary.needsReview, 0);
+  assert.deepEqual(projects, ['飲食企画A', '飲食企画B']);
+  assert.equal(delta.updates[0].row[headers.indexOf('提出状況')], '提出済み');
+  assert.equal(delta.appends[0][headers.indexOf('提出状況')], '提出済み');
+  assert.deepEqual(delta.issues, []);
 });
 
 test('旧参参一覧はマスターからメールを補って提出管理形式へ移行する', () => {
@@ -980,9 +1044,13 @@ test('優先候補列が空なら同じ論理項目の次候補を行ごとに�
   assert.equal(masterValue(result.rows[0], '企画名'), '元の企画名');
 });
 
-test('Unicode・trim・メール小文字化で暫定キーを正規化する', () => {
-  const left = context.buildProvisionalKey_(' ＴＥＳＴ＠ＥＸＡＭＰＬＥ．ＣＯＭ ', ' 屋台 ');
-  const right = context.buildProvisionalKey_('test@example.com', '屋台');
+test('Unicode・trim・メール小文字化・企画名空白で暫定キーを正規化する', () => {
+  const left = context.buildProvisionalKey_(
+    ' ＴＥＳＴ＠ＥＸＡＭＰＬＥ．ＣＯＭ ',
+    ' 屋台 ',
+    ' 合成　Project '
+  );
+  const right = context.buildProvisionalKey_('test@example.com', '屋台', '合成 project');
   assert.equal(left, right);
   assert.match(context.provisionalManagementId_(left), /^TMP-[A-Z0-9]{14}$/);
 });
@@ -1026,8 +1094,8 @@ test('不正行があっても正常行のupsertを継続する', () => {
 test('暫定キー衝突は統合せず要確認にし、再実行でも重複しない', () => {
   const headers = ['メール', '参加形態', 'サークル名', '催事名'];
   const rows = [
-    ['collision@example.com', '教室企画', '合成団体1', '企画1'],
-    ['collision@example.com', '教室企画', '合成団体2', '企画2']
+    ['collision@example.com', '教室企画', '合成団体1', '同一企画'],
+    ['collision@example.com', '教室企画', '合成団体2', '同一企画']
   ];
   const batch = makeBatch(headers, rows);
   const first = context.planMasterUpsert_(masterHeaders, [], [batch], 'TIME-1');
@@ -1039,6 +1107,58 @@ test('暫定キー衝突は統合せず要確認にし、再実行でも重複�
   const second = context.planMasterUpsert_(masterHeaders, first.rows, [batch], 'TIME-2');
   assert.equal(second.rows.length, 1);
   assert.equal(second.summary.created, 0);
+});
+
+test('マスターも同じ提出者の別企画を別行として同期する', () => {
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['multiple-master@example.com', '教室企画', '同一団体', '企画A'],
+      ['multiple-master@example.com', '教室企画', '同一団体', '企画B']
+    ]
+  );
+  const result = context.planMasterUpsert_(masterHeaders, [], [batch], 'TIME');
+
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.summary.created, 2);
+  assert.equal(result.summary.needsReview, 0);
+  assert.equal(result.summary.errors, 0);
+  assert.deepEqual(
+    result.rows.map((row) => masterValue(row, '企画名')).sort(),
+    ['企画A', '企画B']
+  );
+});
+
+test('旧暫定キー衝突は企画名別に解消し、既存行を再利用する', () => {
+  const existing = masterHeaders.map((header) => ({
+    管理ID: 'TMP-LEGACYKEY0001',
+    メールアドレス: 'legacy-master@example.com',
+    参加企画: '飲食物販売企画',
+    団体名: '同一団体',
+    企画名: '飲食企画A',
+    データソース: '26参参フォーム回答',
+    同期ステータス: '要確認',
+    最終更新日時: 'OLD-TIME',
+    要確認: 'TRUE',
+    要確認理由: '暫定キー衝突: 同一キーの複数回答を自動統合していません'
+  })[header] || '');
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['legacy-master@example.com', '飲食物販売企画', '同一団体', '飲食企画A'],
+      ['legacy-master@example.com', '飲食物販売企画', '同一団体', '飲食企画B']
+    ]
+  );
+  const result = context.planMasterUpsert_(masterHeaders, [existing], [batch], 'TIME');
+
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.summary.created, 1);
+  assert.equal(result.summary.updated, 1);
+  assert.equal(result.summary.needsReview, 0);
+  assert.equal(masterValue(result.rows[0], '管理ID'), 'TMP-LEGACYKEY0001');
+  assert.equal(masterValue(result.rows[0], '同期ステータス'), '同期済み');
+  assert.equal(masterValue(result.rows[0], '要確認'), 'FALSE');
+  assert.equal(masterValue(result.rows[0], '要確認理由'), '');
 });
 
 test('キー項目変更の疑いは新旧行を自動統合せず要確認にする', () => {
