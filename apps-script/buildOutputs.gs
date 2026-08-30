@@ -175,14 +175,6 @@ function participantDesiredRow_(existingRow, index, response, result, currentIso
   return desired;
 }
 
-function participantMatchedResult_(row, index, response) {
-  var registrationName = normalizeText_(
-    participantTrackerCell_(row, index, '参参名・参加申し込み時')
-  );
-  if (!registrationName) return '申込情報未登録';
-  return registrationName === normalizeText_(response.organization) ? '一致' : '参参名差異';
-}
-
 function changedParticipantSegments_(existingRow, desiredRow, headers) {
   var writable = ['提出状況'].concat(APP_CONFIG.participantAutomaticHeaders).map(normalizeHeader_);
   var writableSet = {};
@@ -251,7 +243,7 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
 
   existing.forEach(function (record) {
     if (!record.key) {
-      planExistingUpdate(record, null, '申込情報不備');
+      planExistingUpdate(record, null, '一覧行不備');
       needsReview += 1;
       issues.push(participantIssue_(
         'E_PARTICIPANT_TRACKER_ROW_INVALID',
@@ -291,21 +283,7 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       ));
       return;
     }
-    var result = participantMatchedResult_(record.row, index, responses[0]);
-    planExistingUpdate(record, responses[0], result);
-    if (result !== '一致') {
-      needsReview += 1;
-      issues.push(participantIssue_(
-        result === '参参名差異'
-          ? 'E_PARTICIPANT_NAME_MISMATCH'
-          : 'E_PARTICIPANT_REGISTRATION_MISSING',
-        result === '参参名差異'
-          ? '参加申し込み時とフォーム回答の参参名が一致しません。'
-          : 'フォーム回答に対応する参加申し込み時の参参名がありません。',
-        record.rowNumber,
-        '参参名・参加申し込み時,参参名・フォーム回答'
-      ));
-    }
+    planExistingUpdate(record, responses[0], '一致');
   });
 
   Object.keys(responsePlan.groups).sort().forEach(function (key) {
@@ -320,21 +298,21 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       row,
       index,
       response,
-      response ? '申込情報未登録' : 'フォーム回答重複',
+      response ? '一致' : 'フォーム回答重複',
       currentIso
     );
     appends.push(row);
-    needsReview += 1;
-    if (responses.length > 1) skipped += responses.length - 1;
-    issues.push(participantIssue_(
-      response ? 'E_PARTICIPANT_REGISTRATION_MISSING' : 'E_PARTICIPANT_FORM_DUPLICATE',
-      response
-        ? 'フォーム回答に対応する参加申し込み情報が参参一覧にありません。'
-        : '同じメールアドレスと参加企画のフォーム回答が複数あるため自動採用しません。',
-      first.rowNumber,
-      response ? '参参名・参加申し込み時' : 'メールアドレス,参加企画',
-      responsePlan.batch.source.name
-    ));
+    if (!response) {
+      needsReview += 1;
+      skipped += responses.length - 1;
+      issues.push(participantIssue_(
+        'E_PARTICIPANT_FORM_DUPLICATE',
+        '同じメールアドレスと参加企画のフォーム回答が複数あるため自動採用しません。',
+        first.rowNumber,
+        'メールアドレス,参加企画',
+        responsePlan.batch.source.name
+      ));
+    }
   });
 
   return {

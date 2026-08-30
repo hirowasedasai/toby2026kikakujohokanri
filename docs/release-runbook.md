@@ -19,7 +19,7 @@
 5. ユーザーからproduction反映を明示依頼された場合だけ`npm run deploy:production`を実行する。
 6. 画面に出る`production`とScript IDの部分表示を確認し、意図した場合だけ`PRODUCTION`と入力する。
 7. production Spreadsheetを再読み込みし、`当日情報媒体AI > 出力スキーマを更新`で確認文字列`PRODUCTION`を入力する。入力4タブは変更しない。
-8. 環境情報、事前チェック、dry runを実行し、件数確認後に同期する。参参一覧の既存申込情報3列と人が付けた`キャンセル`・`確認中`が保持されることを確認する。
+8. 環境情報、事前チェック、dry runを実行し、件数確認後に同期する。参参一覧のフォーム回答値と、人が付けた`キャンセル`・`確認中`が保持されることを確認する。
 9. 出力と`26処理ログ`を確認する。自動同期を使う場合だけ`当日情報媒体AI > 自動同期を有効化`を実行し、フォーム送信triggerを重複なしで作成する。
 
 productionスクリプトは`main`、clean worktree、verifyを強制し、`--force`を使わない。通常のbound scriptのため`clasp deploy`は使わず、追跡用versionだけを作る。

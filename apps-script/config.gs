@@ -67,6 +67,17 @@ var APP_CONFIG = Object.freeze({
     '参加企画',
     '提出状況',
     'メールアドレス',
+    '参参名・フォーム回答',
+    '参参名・確定版',
+    '企画名・フォーム回答',
+    '企画名・確定版',
+    '照合結果',
+    '最終同期日時'
+  ]),
+  previousParticipantTrackerHeaders: Object.freeze([
+    '参加企画',
+    '提出状況',
+    'メールアドレス',
     '参参名・参加申し込み時',
     '参参名・フォーム回答',
     '参参名・確定版',
@@ -84,11 +95,6 @@ var APP_CONFIG = Object.freeze({
     '販売物',
     '画像リンク',
     '最終更新日時'
-  ]),
-  participantBaselineHeaders: Object.freeze([
-    '参加企画',
-    'メールアドレス',
-    '参参名・参加申し込み時'
   ]),
   participantAutomaticHeaders: Object.freeze([
     '参参名・フォーム回答',
@@ -108,7 +114,6 @@ var APP_CONFIG = Object.freeze({
     '参加企画': 210,
     '提出状況': 120,
     'メールアドレス': 190,
-    '参参名・参加申し込み時': 300,
     '参参名・フォーム回答': 300,
     '参参名・確定版': 300,
     '企画名・フォーム回答': 300,

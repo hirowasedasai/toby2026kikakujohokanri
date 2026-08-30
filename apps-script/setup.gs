@@ -23,6 +23,42 @@ function migrateParticipantRowsByHeader_(values) {
   });
 }
 
+function migratePreviousParticipantTrackerRows_(values) {
+  if (!values || values.length < 2) return [];
+  var sourceIndex = buildHeaderIndex_(values[0]);
+  var outputIndex = buildHeaderIndex_(APP_CONFIG.participantOutputHeaders);
+  return values.slice(1).filter(function (sourceRow) {
+    return !isBlankRow_(sourceRow);
+  }).map(function (sourceRow) {
+    var row = APP_CONFIG.participantOutputHeaders.map(function (header) {
+      var column = sourceIndex[normalizeHeader_(header)];
+      return column === undefined ? '' : sourceRow[column];
+    });
+    var oldResult = normalizeText_(
+      sourceRow[sourceIndex[normalizeHeader_('照合結果')]]
+    );
+    var responseName = normalizeText_(
+      participantTrackerCell_(row, outputIndex, '参参名・フォーム回答')
+    );
+    if (
+      responseName &&
+      (oldResult === '申込情報未登録' || oldResult === '参参名差異')
+    ) {
+      var currentStatus = normalizeText_(
+        participantTrackerCell_(row, outputIndex, '提出状況')
+      );
+      if (currentStatus !== 'キャンセル') {
+        setParticipantTrackerCell_(row, outputIndex, '提出状況', '提出済み');
+      }
+      setParticipantTrackerCell_(row, outputIndex, '照合結果', '一致');
+    }
+    if (oldResult === '申込情報不備') {
+      setParticipantTrackerCell_(row, outputIndex, '照合結果', '一覧行不備');
+    }
+    return row;
+  });
+}
+
 function migratePreviousParticipantRows_(values, masterValues) {
   if (!values || values.length < 2) return [];
   var previousIndex = buildHeaderIndex_(values[0]);
@@ -59,7 +95,7 @@ function migratePreviousParticipantRows_(values, masterValues) {
     var output = new Array(APP_CONFIG.participantOutputHeaders.length).fill('');
     var outputIndex = buildHeaderIndex_(APP_CONFIG.participantOutputHeaders);
     setParticipantTrackerCell_(output, outputIndex, '参加企画', participation);
-    setParticipantTrackerCell_(output, outputIndex, '提出状況', '確認中');
+    setParticipantTrackerCell_(output, outputIndex, '提出状況', email ? '提出済み' : '確認中');
     setParticipantTrackerCell_(output, outputIndex, 'メールアドレス', email);
     setParticipantTrackerCell_(output, outputIndex, '参参名・フォーム回答', organization);
     setParticipantTrackerCell_(output, outputIndex, '参参名・確定版', organization);
@@ -69,7 +105,7 @@ function migratePreviousParticipantRows_(values, masterValues) {
       output,
       outputIndex,
       '照合結果',
-      email ? '申込情報未登録' : '移行要確認'
+      email ? '一致' : '移行要確認'
     );
     setParticipantTrackerCell_(
       output,
@@ -111,7 +147,7 @@ function applyParticipantSheetPresentation_(sheet, headerIndex) {
     );
   }
   sheet.setFrozenRows(1);
-  var frozenColumn = headerIndex[normalizeHeader_('参参名・参加申し込み時')];
+  var frozenColumn = headerIndex[normalizeHeader_('メールアドレス')];
   if (frozenColumn !== undefined) sheet.setFrozenColumns(frozenColumn + 1);
   Object.keys(APP_CONFIG.participantColumnWidths).forEach(function (header) {
     var column = headerIndex[normalizeHeader_(header)];
@@ -135,6 +171,8 @@ function ensureParticipantSchemaSheet_(spreadsheet) {
     !headerOrderMatches_(values[0], APP_CONFIG.participantOutputHeaders)
   ) {
     writeParticipantSchema_(sheet, migrateParticipantRowsByHeader_(values));
+  } else if (headerSetMatches_(values[0], APP_CONFIG.previousParticipantTrackerHeaders)) {
+    writeParticipantSchema_(sheet, migratePreviousParticipantTrackerRows_(values));
   } else if (headerSetMatches_(values[0], APP_CONFIG.previousParticipantOutputHeaders)) {
     var masterSheet = requireSheet_(spreadsheet, APP_CONFIG.sheets.master);
     writeParticipantSchema_(
