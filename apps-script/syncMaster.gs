@@ -36,6 +36,7 @@ function collectInputRecords_(inputBatches) {
         projectName: normalizeText_(inputField_(row, batch, 'projectName')),
         salesItems: normalizeText_(inputField_(row, batch, 'salesItems')),
         imageLink: normalizeText_(inputField_(row, batch, 'imageLink')),
+        timestamp: inputField_(row, batch, 'timestamp'),
         sourceSheet: batch.source.name,
         sourceType: batch.source.type,
         priority: batch.source.priority,
@@ -122,6 +123,61 @@ function collectInputRecords_(inputBatches) {
   });
 
   return { records: records, issues: issues, skipped: skipped };
+}
+
+function inputTimestampMillis_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
+  if (!normalizeText_(value)) return NaN;
+  var parsed = new Date(value).getTime();
+  return isNaN(parsed) ? NaN : parsed;
+}
+
+function resolveImageOnlyResubmission_(group) {
+  if (!group || group.length < 2) return { resolved: false };
+  var comparableFields = [
+    'officialId',
+    'email',
+    'participation',
+    'bureau',
+    'organization',
+    'projectName',
+    'salesItems',
+    'sourceSheet'
+  ];
+  var sameBusinessIdentity = comparableFields.every(function (field) {
+    var first = normalizeText_(group[0][field]);
+    return group.every(function (record) {
+      return normalizeText_(record[field]) === first;
+    });
+  });
+  if (!sameBusinessIdentity) return { resolved: false };
+
+  var imageLinks = {};
+  group.forEach(function (record) {
+    imageLinks[normalizeText_(record.imageLink)] = true;
+  });
+  if (Object.keys(imageLinks).length < 2) return { resolved: false };
+
+  var candidates = group.map(function (record) {
+    return { record: record, timestamp: inputTimestampMillis_(record.timestamp) };
+  });
+  if (candidates.some(function (candidate) { return isNaN(candidate.timestamp); })) {
+    return { resolved: false };
+  }
+  candidates.sort(function (left, right) {
+    if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+    return left.record.rowNumber - right.record.rowNumber;
+  });
+  if (
+    candidates.length > 1 &&
+    candidates[candidates.length - 1].timestamp === candidates[candidates.length - 2].timestamp
+  ) {
+    return { resolved: false };
+  }
+  return {
+    resolved: true,
+    record: candidates[candidates.length - 1].record
+  };
 }
 
 function masterRecordFromRow_(row, index, rowNumber) {
@@ -313,9 +369,32 @@ function planMasterUpsert_(masterHeaders, masterRows, inputBatches, currentIso) 
       if (left.priority !== right.priority) return left.priority - right.priority;
       return left.rowNumber - right.rowNumber;
     });
-    var isProvisionalCollision = group[0].keyType === 'provisional' && group.length > 1;
-    var record = isProvisionalCollision ? group[0] : group[group.length - 1];
+    var imageResubmission = group[0].keyType === 'provisional'
+      ? resolveImageOnlyResubmission_(group)
+      : { resolved: false };
+    var isProvisionalCollision =
+      group[0].keyType === 'provisional' && group.length > 1 && !imageResubmission.resolved;
+    var record = imageResubmission.resolved
+      ? imageResubmission.record
+      : isProvisionalCollision
+        ? group[0]
+        : group[group.length - 1];
     if (group.length > 1) summary.skipped += group.length - 1;
+
+    if (imageResubmission.resolved) {
+      issues.push(
+        makeIssue_(
+          'INFO',
+          'I_IMAGE_RESUBMISSION_LATEST_SELECTED',
+          '同一企画の画像リンクのみ異なる再送のため、回答日時が新しい回答を採用しました。',
+          {
+            sourceSheet: record.sourceSheet,
+            rowNumber: record.rowNumber,
+            columnName: '画像リンク,タイムスタンプ'
+          }
+        )
+      );
+    }
 
     if (isProvisionalCollision) {
       var collisionReason = '暫定キー衝突: 同一キーの複数回答を自動統合していません';

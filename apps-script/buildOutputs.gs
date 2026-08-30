@@ -147,10 +147,31 @@ function participantResponseGroups_(inputBatches) {
   Object.keys(keysByBase).forEach(function (baseKey) {
     keysByBase[baseKey].sort();
   });
+  var autoResolvedKeys = {};
+  Object.keys(groups).forEach(function (key) {
+    var resolution = resolveImageOnlyResubmission_(groups[key]);
+    if (!resolution.resolved) return;
+    collected.skipped += groups[key].length - 1;
+    groups[key] = [resolution.record];
+    autoResolvedKeys[key] = true;
+    collected.issues.push(
+      makeIssue_(
+        'INFO',
+        'I_IMAGE_RESUBMISSION_LATEST_SELECTED',
+        '同一企画の画像リンクのみ異なる再送のため、回答日時が新しい回答を採用しました。',
+        {
+          sourceSheet: resolution.record.sourceSheet,
+          rowNumber: resolution.record.rowNumber,
+          columnName: '画像リンク,タイムスタンプ'
+        }
+      )
+    );
+  });
   return {
     batch: batch,
     groups: groups,
     keysByBase: keysByBase,
+    autoResolvedKeys: autoResolvedKeys,
     issues: collected.issues.slice(),
     skipped: collected.skipped
   };
@@ -332,7 +353,8 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       return;
     }
     if (
-      record.legacyPlaceholder &&
+      (record.legacyPlaceholder || responsePlan.autoResolvedKeys[record.key]) &&
+      record.result === 'フォーム回答重複' &&
       normalizeText_(participantTrackerCell_(record.row, index, '提出状況')) === '確認中'
     ) {
       setParticipantTrackerCell_(record.row, index, '提出状況', '');
@@ -378,7 +400,7 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
       updated: updates.length,
       skipped: skipped,
       needsReview: needsReview,
-      errors: issues.length
+      errors: issues.filter(function (issue) { return issue.level !== 'INFO'; }).length
     }
   };
 }
