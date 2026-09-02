@@ -174,12 +174,16 @@ function ensureParticipantDuplicateWarningRule_(sheet, headerIndex) {
   ) return;
   var formula = '=AND($' + columnLetter_(statusColumn + 1) + '2="確認中",$' +
     columnLetter_(resultColumn + 1) + '2="' + APP_CONFIG.participantDuplicateResult + '")';
+  var previousFormula = '=AND($' + columnLetter_(statusColumn + 1) + '2="確認中",$' +
+    columnLetter_(resultColumn + 1) + '2="' +
+    APP_CONFIG.previousParticipantDuplicateResult + '")';
   var rules = sheet.getConditionalFormatRules().filter(function (rule) {
     var condition = rule.getBooleanCondition();
     if (!condition) return true;
     if (condition.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA) return true;
     return !condition.getCriteriaValues().some(function (value) {
-      return normalizeText_(value) === formula;
+      var normalized = normalizeText_(value);
+      return normalized === formula || normalized === previousFormula;
     });
   });
   rules.push(

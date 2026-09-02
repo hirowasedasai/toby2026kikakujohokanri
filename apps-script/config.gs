@@ -111,7 +111,8 @@ var APP_CONFIG = Object.freeze({
     '除外日時',
     '除外理由'
   ]),
-  participantDuplicateResult: '同一メアド・参参名重複',
+  participantDuplicateResult: '同一メアド・参参名・参加企画重複',
+  previousParticipantDuplicateResult: '同一メアド・参参名重複',
   participantDuplicateWarningBackground: '#fff2cc',
   previousParticipantOutputHeaders: Object.freeze([
     '管理ID',

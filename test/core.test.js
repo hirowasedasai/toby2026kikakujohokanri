@@ -443,13 +443,13 @@ test('参参名はフォーム回答を確定版として既存行と新規行�
   assert.deepEqual(delta.issues, []);
 });
 
-test('同じメアドと参参名の複数回答は企画が違っても全件を残して警告する', () => {
+test('同じメアド・参参名・参加企画の複数回答は企画名が違っても全件を残して警告する', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [
       ['multiple@example.com', '教室企画', '同一団体', '企画A'],
-      ['multiple@example.com', 'ステージ企画', '同一団体', '企画B']
+      ['multiple@example.com', '教室企画', '同一団体', '企画B']
     ]
   );
   const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
@@ -459,7 +459,7 @@ test('同じメアドと参参名の複数回答は企画が違っても全件�
     (row) => row[headers.indexOf('提出状況')] === '確認中'
   ), true);
   assert.equal(delta.appends.every(
-    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名重複'
+    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名・参加企画重複'
   ), true);
   assert.equal(new Set(delta.appends.map(
     (row) => row[headers.indexOf('回答識別子')]
@@ -474,14 +474,74 @@ test('重複警告はメールの大小文字と参参名の空白・文字幅�
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [
       ['Case@example.com', '教室企画', '合成　団体', '企画A'],
-      ['case@example.com', 'ステージ企画', '合成 団体', '企画B']
+      ['case@example.com', '教室企画', '合成 団体', '企画B']
     ]
   );
   const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
 
   assert.equal(delta.summary.needsReview, 2);
   assert.equal(delta.appends.every(
-    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名重複'
+    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名・参加企画重複'
+  ), true);
+});
+
+test('同じメアドと参参名でも参加企画が違えば別企画として警告しない', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['separate@example.com', '教室企画', '同一団体', '企画A'],
+      ['separate@example.com', 'ステージ企画', '同一団体', '企画B']
+    ]
+  );
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+
+  assert.equal(delta.appends.length, 2);
+  assert.equal(delta.summary.needsReview, 0);
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('提出状況')] === '提出済み'
+  ), true);
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('照合結果')] === '一致'
+  ), true);
+});
+
+test('旧判定で確認中になった参加企画違いの行は提出済みへ戻す', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['restore@example.com', '教室企画', '同一団体', '企画A'],
+      ['restore@example.com', 'ステージ企画', '同一団体', '企画B']
+    ]
+  );
+  const responsePlan = context.participantResponsePlan_([batch], {});
+  const existingRows = responsePlan.records.map((record) => {
+    const row = new Array(headers.length).fill('');
+    row[headers.indexOf('参加企画')] = record.participation;
+    row[headers.indexOf('提出状況')] = '確認中';
+    row[headers.indexOf('メールアドレス')] = record.email;
+    row[headers.indexOf('参参名・フォーム回答')] = record.organization;
+    row[headers.indexOf('参参名・確定版')] = record.organization;
+    row[headers.indexOf('企画名・フォーム回答')] = record.projectName;
+    row[headers.indexOf('企画名・確定版')] = record.projectName;
+    row[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
+    row[headers.indexOf('回答識別子')] = record.responseId;
+    return row;
+  });
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, ...existingRows],
+    [batch],
+    'TIME'
+  ));
+
+  assert.equal(delta.updates.length, 2);
+  assert.equal(delta.summary.needsReview, 0);
+  assert.equal(delta.updates.every(
+    (update) => update.row[headers.indexOf('提出状況')] === '提出済み'
+  ), true);
+  assert.equal(delta.updates.every(
+    (update) => update.row[headers.indexOf('照合結果')] === '一致'
   ), true);
 });
 
@@ -521,7 +581,7 @@ test('同じメアドと参参名の再送も最新だけに畳まず全回答�
   assert.equal(delta.appends.length, 2);
   assert.equal(delta.summary.needsReview, 2);
   assert.equal(delta.appends.every(
-    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名重複'
+    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名・参加企画重複'
   ), true);
 });
 
@@ -579,8 +639,8 @@ test('選択行の回答識別子は空欄を除外して重複なく取得す�
   const blank = new Array(headers.length).fill('');
   first[headers.indexOf('回答識別子')] = 'PR-FIRST';
   second[headers.indexOf('回答識別子')] = 'PR-FIRST';
-  first[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
-  second[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
+  first[headers.indexOf('照合結果')] = '同一メアド・参参名・参加企画重複';
+  second[headers.indexOf('照合結果')] = '同一メアド・参参名・参加企画重複';
 
   assert.deepEqual(
     plain(context.participantResponseIdsFromSelection_(headers, [first, second, blank])),
@@ -605,9 +665,10 @@ test('同じ重複グループの全回答を一度に除外しない', () => {
   const makeDuplicateRow = (id, projectName) => {
     const row = new Array(headers.length).fill('');
     row[headers.indexOf('メールアドレス')] = 'guard@example.com';
+    row[headers.indexOf('参加企画')] = '教室企画';
     row[headers.indexOf('参参名・フォーム回答')] = 'ガード団体';
     row[headers.indexOf('企画名・フォーム回答')] = projectName;
-    row[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
+    row[headers.indexOf('照合結果')] = '同一メアド・参参名・参加企画重複';
     row[headers.indexOf('回答識別子')] = id;
     return row;
   };

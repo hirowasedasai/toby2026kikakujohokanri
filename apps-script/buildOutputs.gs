@@ -132,11 +132,13 @@ function participantResponseId_(record) {
   return 'PR-' + hashString_(sourceSheet + '|' + rowNumber) + '-' + rowNumber;
 }
 
-function participantDuplicateKey_(email, organization) {
+function participantDuplicateKey_(email, organization, participation) {
   var normalizedEmail = normalizeEmail_(email);
   var normalizedOrganization = normalizeProjectNameKey_(organization);
-  if (!normalizedEmail || !normalizedOrganization) return '';
-  return 'participant-duplicate:' + normalizedEmail + '|' + normalizedOrganization;
+  var normalizedParticipation = normalizeText_(participation);
+  if (!normalizedEmail || !normalizedOrganization || !normalizedParticipation) return '';
+  return 'participant-duplicate:' + normalizedEmail + '|' + normalizedOrganization + '|' +
+    normalizedParticipation;
 }
 
 function participantExclusionSetFromValues_(values) {
@@ -172,7 +174,11 @@ function participantResponsePlan_(inputBatches, excludedResponseIds) {
     record.responseId = participantResponseId_(record);
     record.trackerKey = buildProvisionalKey_(record.email, record.participation, record.projectName);
     record.baseKey = participantBaseKey_(record.email, record.participation);
-    record.duplicateKey = participantDuplicateKey_(record.email, record.organization);
+    record.duplicateKey = participantDuplicateKey_(
+      record.email,
+      record.organization,
+      record.participation
+    );
     if (!record.responseId || excluded[record.responseId]) {
       collected.skipped += 1;
       return;
@@ -198,11 +204,11 @@ function participantResponsePlan_(inputBatches, excludedResponseIds) {
       makeIssue_(
         'WARN',
         'E_PARTICIPANT_EMAIL_NAME_DUPLICATE',
-        '同じメールアドレスと参参名のフォーム回答が複数あるため、人力確認が必要です。',
+        '同じメールアドレス、参参名、参加企画のフォーム回答が複数あるため、人力確認が必要です。',
         {
           sourceSheet: group[0].sourceSheet,
           rowNumber: group[0].rowNumber,
-          columnName: 'メールアドレス,参参名'
+          columnName: 'メールアドレス,参参名,参加企画'
         }
       )
     );
@@ -340,7 +346,11 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso, e
 
   function planExistingUpdate(record, response, result) {
     if (
-      (record.result === APP_CONFIG.participantDuplicateResult || record.result === 'フォーム回答重複') &&
+      (
+        record.result === APP_CONFIG.participantDuplicateResult ||
+        record.result === APP_CONFIG.previousParticipantDuplicateResult ||
+        record.result === 'フォーム回答重複'
+      ) &&
       result === '一致' &&
       normalizeText_(participantTrackerCell_(record.row, index, '提出状況')) === '確認中'
     ) {
@@ -647,7 +657,8 @@ function participantFullySelectedDuplicateGroupCount_(headers, values, selectedR
     var duplicateKey = participantDuplicateKey_(
       participantTrackerCell_(row, index, 'メールアドレス'),
       participantTrackerCell_(row, index, '参参名・フォーム回答') ||
-        participantTrackerCell_(row, index, '参参名・確定版')
+        participantTrackerCell_(row, index, '参参名・確定版'),
+      participantTrackerCell_(row, index, '参加企画')
     );
     if (!responseId || !duplicateKey) return;
     totals[duplicateKey] = (totals[duplicateKey] || 0) + 1;
@@ -721,7 +732,7 @@ function excludeSelectedParticipantResponses() {
     if (responseIds.length === 0) {
       throw makeAppError_(
         'E_PARTICIPANT_EXCLUSION_ID_MISSING',
-        '選択行に同一メアド・参参名の警告中フォーム回答がありません。先に参参一覧を更新してください。'
+        '選択行に同一メアド・参参名・参加企画の警告中フォーム回答がありません。先に参参一覧を更新してください。'
       );
     }
     if (participantFullySelectedDuplicateGroupCount_(
@@ -731,7 +742,7 @@ function excludeSelectedParticipantResponses() {
     ) > 0) {
       throw makeAppError_(
         'E_PARTICIPANT_EXCLUSION_WOULD_REMOVE_ALL',
-        '同じメールアドレスと参参名の回答をすべて除外することはできません。正しい1件を選択から外してください。'
+        '同じメールアドレス、参参名、参加企画の回答をすべて除外することはできません。正しい1件を選択から外してください。'
       );
     }
     var confirmation = ui.alert(
@@ -778,7 +789,7 @@ function excludeSelectedParticipantResponses() {
       ) > 0) {
         throw makeAppError_(
           'E_PARTICIPANT_EXCLUSION_WOULD_REMOVE_ALL',
-          '同じメールアドレスと参参名の回答をすべて除外することはできません。正しい1件を選択から外してください。'
+          '同じメールアドレス、参参名、参加企画の回答をすべて除外することはできません。正しい1件を選択から外してください。'
         );
       }
       var excluded = appendParticipantExclusions_(
