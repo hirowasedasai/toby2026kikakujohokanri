@@ -329,6 +329,74 @@ test('参参一覧の同一内容再同期は更新せず、人が付けた状�
   assert.equal(delta.updates.length, 0);
 });
 
+test('参参一覧は参加企画ごとに行全体を並べ替え、手動の提出状況を保持する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const index = Object.fromEntries(headers.map((header, position) => [header, position]));
+  const makeRow = (participation, status, email, organization, projectName) => {
+    const row = new Array(headers.length).fill('');
+    row[index['参加企画']] = participation;
+    row[index['提出状況']] = status;
+    row[index['メールアドレス']] = email;
+    row[index['参参名・確定版']] = organization;
+    row[index['企画名・確定版']] = projectName;
+    return row;
+  };
+  const rows = [
+    makeRow('普通教室企画', '確認中', 'ordinary-z@example.com', '団体Z', '企画Z'),
+    makeRow('ストリート短時間企画', 'キャンセル', 'street@example.com', '団体S', '企画S'),
+    makeRow('普通教室企画', '提出済み', 'ordinary-a@example.com', '団体A', '企画A')
+  ];
+  const statusByEmail = Object.fromEntries(
+    rows.map((row) => [row[index['メールアドレス']], row[index['提出状況']]])
+  );
+  const sortCalls = [];
+  const sheet = {
+    getLastRow: () => rows.length + 1,
+    getLastColumn: () => headers.length,
+    getRange(row, column, rowCount, columnCount) {
+      assert.deepEqual({ row, column, rowCount, columnCount }, {
+        row: 2,
+        column: 1,
+        rowCount: rows.length,
+        columnCount: headers.length
+      });
+      return {
+        sort(specs) {
+          sortCalls.push(plain(specs));
+          rows.sort((left, right) => {
+            for (const spec of specs) {
+              const leftValue = String(left[spec.column - 1] ?? '');
+              const rightValue = String(right[spec.column - 1] ?? '');
+              const compared = leftValue.localeCompare(rightValue, 'ja');
+              if (compared !== 0) return spec.ascending ? compared : -compared;
+            }
+            return 0;
+          });
+        }
+      };
+    }
+  };
+
+  context.sortParticipantTrackerSheet_(sheet, headers);
+
+  assert.deepEqual(sortCalls, [[
+    { column: index['参加企画'] + 1, ascending: true },
+    { column: index['企画名・確定版'] + 1, ascending: true },
+    { column: index['参参名・確定版'] + 1, ascending: true }
+  ]]);
+  const ordinaryRows = rows.filter((row) => row[index['参加企画']] === '普通教室企画');
+  assert.deepEqual(
+    ordinaryRows.map((row) => row[index['企画名・確定版']]),
+    ['企画A', '企画Z']
+  );
+  rows.forEach((row) => {
+    assert.equal(
+      row[index['提出状況']],
+      statusByEmail[row[index['メールアドレス']]]
+    );
+  });
+});
+
 test('参参名はフォーム回答を確定版として既存行と新規行へ反映する', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
   const existing = new Array(headers.length).fill('');

@@ -418,6 +418,24 @@ function applyParticipantTrackerDelta_(sheet, delta, width) {
   }
 }
 
+function participantTrackerSortSpec_(headers) {
+  var index = buildHeaderIndex_(headers);
+  return ['参加企画', '企画名・確定版', '参参名・確定版'].map(function (header) {
+    return {
+      column: index[normalizeHeader_(header)] + 1,
+      ascending: true
+    };
+  });
+}
+
+function sortParticipantTrackerSheet_(sheet, headers) {
+  var dataRowCount = Math.max(sheet.getLastRow() - 1, 0);
+  if (dataRowCount < 2) return;
+  var width = Math.max(headers.length, sheet.getLastColumn());
+  sheet.getRange(2, 1, dataRowCount, width)
+    .sort(participantTrackerSortSpec_(headers));
+}
+
 function performBuildParticipantTracker_(suppliedPreflight, executionId) {
   var preflight = suppliedPreflight || preflightInternal_({
     inputs: true,
@@ -434,6 +452,10 @@ function performBuildParticipantTracker_(suppliedPreflight, executionId) {
     preflight.participantOutput.sheet,
     plan,
     preflight.participantOutput.values[0].length
+  );
+  sortParticipantTrackerSheet_(
+    preflight.participantOutput.sheet,
+    preflight.participantOutput.values[0]
   );
   plan.summary.executionId = executionId;
   appendProcessLog_(
