@@ -92,6 +92,10 @@ function handleFormSubmit_(event) {
     runTriggeredBureauOutputs_('trigger:staffChangeBureauDelta');
     return;
   }
+  if (source.syncToBureaus === true) {
+    runTriggeredBureauOutputs_('trigger:staffOtherPublicationBureauDelta');
+    return;
+  }
   if (source.syncToMaster === false) return;
   runTriggeredSync_(
     'trigger:formSubmit',

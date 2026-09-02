@@ -191,7 +191,7 @@ test('運スタ企画フォームを通常入力として部署名と固定参�
     (input) => input.name === '26運スタ企画フォーム回答'
   );
   assert.ok(source);
-  assert.equal(context.APP_CONFIG.sheets.inputs.length, 4);
+  assert.equal(context.APP_CONFIG.sheets.inputs.length, 5);
 
   const headers = [
     'メールアドレス',
@@ -701,7 +701,7 @@ test('申込時列を持つ参参一覧は列を削除し、誤った要確認�
 
 test('変更申請2タブは自由記述をマスターへ自動反映しない', () => {
   const reviewSources = plain(context.APP_CONFIG.sheets.inputs).filter(
-    (source) => source.syncToMaster === false
+    (source) => source.syncToMaster === false && source.syncToBureaus !== true
   );
   assert.deepEqual(
     reviewSources.map((source) => source.name),
@@ -862,6 +862,206 @@ test('同じ企画名の通常回答が複数ある変更申請は自動反映�
   assert.deepEqual(
     plain(plan.rowsByBureau['企画局']).map((row) => row[placeIndex]),
     ['場所A', '場所B']
+  );
+});
+
+test('その他掲載情報フォームを局別専用入力として解決する', () => {
+  const source = context.APP_CONFIG.sheets.inputs.find(
+    (input) => input.type === 'STAFF_OTHER_PUBLICATION'
+  );
+  assert.ok(source);
+  assert.equal(source.syncToMaster, false);
+  assert.equal(source.syncToBureaus, true);
+
+  const masterCollection = context.collectInputRecords_([{
+    values: [['タイムスタンプ'], ['TIME']],
+    columns: {},
+    columnAlternatives: {},
+    source
+  }]);
+  assert.equal(masterCollection.records.length, 0);
+  assert.equal(masterCollection.skipped, 0);
+  assert.equal(masterCollection.issues.length, 0);
+
+  const headers = [
+    'タイムスタンプ',
+    'メールアドレス',
+    '担当者名',
+    '所属局',
+    '部署名（チーム、PJなど）',
+    '企画名（26字以内）',
+    '掲載文字情報',
+    '備考'
+  ];
+  const resolution = context.resolveHeaders_(
+    headers,
+    context.APP_CONFIG.bureauViewHeaderCandidates,
+    context.APP_CONFIG.requiredBureauOtherPublicationFields
+  );
+  assert.deepEqual(plain(resolution.missing), []);
+  assert.equal(resolution.columns.publicationText, 6);
+
+  const plan = context.buildBureauOutputPlan_([{
+    values: [
+      headers,
+      ['TIME', 'other@example.com', '担当者', '企画局', '企画チーム', 'その他企画', '掲載する文章', '連絡事項']
+    ],
+    source
+  }]);
+  const record = plan.records[0];
+  const outputHeaders = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const initialRow = plain(context.mergeBureauRecordWithManualRow_(
+    record,
+    null,
+    null,
+    outputHeaders
+  ));
+
+  assert.equal(record.group, 'other');
+  assert.equal(initialRow[outputHeaders.indexOf('企画名')], 'その他企画');
+  assert.equal(initialRow[outputHeaders.indexOf('掲載文字情報')], '掲載する文章');
+  assert.equal(initialRow[outputHeaders.indexOf('担当者名')], '担当者');
+  assert.equal(initialRow[outputHeaders.indexOf('部署名')], '企画チーム');
+  assert.equal(initialRow[outputHeaders.indexOf('備考')], '連絡事項');
+  assert.equal(initialRow[outputHeaders.indexOf('内部向け企画・取り組み名')], '');
+  assert.equal(initialRow[outputHeaders.indexOf('企画日時')], '');
+  assert.equal(initialRow[outputHeaders.indexOf('企画場所')], '');
+  assert.equal(initialRow[outputHeaders.indexOf('当媒チェック')], '未確認');
+  assert.equal(initialRow[outputHeaders.indexOf('校閲チェック')], '未確認');
+});
+
+test('その他掲載情報の不足セルへ手動補完した値を次回同期でも保持する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const oldRecord = makeBureauRecord({
+    sourceSheet: '26運スタ企画その他掲載情報',
+    sourceType: 'STAFF_OTHER_PUBLICATION',
+    group: 'other',
+    publicationText: '初回掲載文',
+    introduction: '',
+    place: '',
+    scheduleOverride: '',
+    changeStatus: ''
+  });
+  const existingRow = plain(context.mergeBureauRecordWithManualRow_(oldRecord, null, null, headers));
+  existingRow[headers.indexOf('ページ名')] = '特集ページ';
+  existingRow[headers.indexOf('内部向け企画・取り組み名')] = '内部名称';
+  existingRow[headers.indexOf('掲載文字情報')] = '手動編集済み掲載文';
+  existingRow[headers.indexOf('企画日時')] = '11/6 18:00';
+  existingRow[headers.indexOf('企画場所')] = '手動入力場所';
+  existingRow[headers.indexOf('企画紹介文')] = '手動補完紹介文';
+  existingRow[headers.indexOf('掲載媒体')] = 'Webサイト';
+  existingRow[headers.indexOf('当媒チェック')] = '確認済み';
+  existingRow[headers.indexOf('校閲チェック')] = '確認済み';
+  const separator = plain(context.bureauOtherPublicationSeparatorRow_(headers));
+  const output = makeBureauOutputState('企画局', [separator, existingRow]);
+  const updatedRecord = makeBureauRecord({
+    sourceSheet: '26運スタ企画その他掲載情報',
+    sourceType: 'STAFF_OTHER_PUBLICATION',
+    group: 'other',
+    publicationText: 'フォーム再送文',
+    introduction: '',
+    place: '',
+    scheduleOverride: '',
+    changeStatus: '',
+    staffName: '更新担当者'
+  });
+  const delta = context.planBureauDelta_([output], [updatedRecord]);
+  const updatedRow = plain(delta.updates[0].row);
+
+  assert.equal(delta.created, 0);
+  assert.equal(delta.updated, 1);
+  assert.equal(updatedRow[headers.indexOf('担当者名')], '更新担当者');
+  assert.equal(updatedRow[headers.indexOf('ページ名')], '特集ページ');
+  assert.equal(updatedRow[headers.indexOf('内部向け企画・取り組み名')], '内部名称');
+  assert.equal(updatedRow[headers.indexOf('掲載文字情報')], '手動編集済み掲載文');
+  assert.equal(updatedRow[headers.indexOf('企画日時')], '11/6 18:00');
+  assert.equal(updatedRow[headers.indexOf('企画場所')], '手動入力場所');
+  assert.equal(updatedRow[headers.indexOf('企画紹介文')], '手動補完紹介文');
+  assert.equal(updatedRow[headers.indexOf('掲載媒体')], 'Webサイト');
+  assert.equal(updatedRow[headers.indexOf('当媒チェック')], '確認済み');
+  assert.equal(updatedRow[headers.indexOf('校閲チェック')], '確認済み');
+});
+
+test('通常企画とその他掲載情報は同じ企画名でも別区分として照合する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const normalRecord = makeBureauRecord({ projectName: '同名企画', matchProjectKeys: ['同名企画'] });
+  const otherRecord = makeBureauRecord({
+    projectName: '同名企画',
+    matchProjectKeys: ['同名企画'],
+    sourceSheet: '26運スタ企画その他掲載情報',
+    sourceType: 'STAFF_OTHER_PUBLICATION',
+    group: 'other',
+    publicationText: '掲載文',
+    introduction: '',
+    changeStatus: ''
+  });
+  const normalRow = plain(context.mergeBureauRecordWithManualRow_(normalRecord, null, null, headers));
+  const otherRow = plain(context.mergeBureauRecordWithManualRow_(otherRecord, null, null, headers));
+  const separator = plain(context.bureauOtherPublicationSeparatorRow_(headers));
+  const delta = context.planBureauDelta_([
+    makeBureauOutputState('企画局', [normalRow, separator, otherRow])
+  ], [normalRecord, otherRecord]);
+
+  assert.equal(delta.created, 0);
+  assert.equal(delta.updated, 0);
+  assert.equal(delta.skipped, 2);
+  assert.equal(delta.reviews.length, 0);
+  assert.equal(delta.issues.length, 0);
+});
+
+test('通常企画は区切り行の前、その他掲載情報は区切り行の後へ追加する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const normal1 = new Array(headers.length).fill('');
+  const normal2 = new Array(headers.length).fill('');
+  const other1 = new Array(headers.length).fill('');
+  const other2 = new Array(headers.length).fill('');
+  normal1[headers.indexOf('企画名')] = '通常1';
+  normal2[headers.indexOf('企画名')] = '通常2';
+  other1[headers.indexOf('企画名')] = 'その他1';
+  other2[headers.indexOf('企画名')] = 'その他2';
+  const separator = plain(context.bureauOtherPublicationSeparatorRow_(headers));
+  const grid = [headers.slice(), normal1, separator, other1];
+  const sheet = {
+    getLastRow() {
+      return grid.length;
+    },
+    getLastColumn() {
+      return headers.length;
+    },
+    insertRowsBefore(rowNumber, count) {
+      const rows = Array.from({ length: count }, () => new Array(headers.length).fill(''));
+      grid.splice(rowNumber - 1, 0, ...rows);
+    },
+    getRange(rowNumber, columnNumber, rowCount, columnCount) {
+      return {
+        getValues() {
+          return grid.slice(rowNumber - 1, rowNumber - 1 + rowCount).map(
+            (row) => row.slice(columnNumber - 1, columnNumber - 1 + columnCount)
+          );
+        },
+        setValues(values) {
+          values.forEach((valuesRow, rowOffset) => {
+            const targetRow = rowNumber - 1 + rowOffset;
+            while (grid.length <= targetRow) grid.push(new Array(headers.length).fill(''));
+            valuesRow.forEach((value, columnOffset) => {
+              grid[targetRow][columnNumber - 1 + columnOffset] = value;
+            });
+          });
+          return this;
+        }
+      };
+    }
+  };
+
+  context.writeBureauAppendGroup_({
+    output: { bureau: '企画局', sheet, values: [headers] },
+    normalRows: [normal2],
+    otherRows: [other2]
+  });
+
+  assert.deepEqual(
+    grid.slice(1).map((row) => row[headers.indexOf('企画名')] || row[headers.indexOf('ページ名')]),
+    ['通常1', '通常2', 'その他掲載情報', 'その他1', 'その他2']
   );
 });
 

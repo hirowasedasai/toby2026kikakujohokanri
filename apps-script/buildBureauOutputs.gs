@@ -1,5 +1,21 @@
 function isStaffBureauSource_(source) {
-  return source && (source.type === 'STAFF_FORM' || source.type === 'STAFF_CHANGE');
+  return source && (
+    source.type === 'STAFF_FORM' ||
+    source.type === 'STAFF_CHANGE' ||
+    source.type === APP_CONFIG.bureauOtherPublicationSourceType
+  );
+}
+
+function isOtherPublicationRecord_(record) {
+  return record && record.sourceType === APP_CONFIG.bureauOtherPublicationSourceType;
+}
+
+function bureauRecordGroup_(record) {
+  return isOtherPublicationRecord_(record) ? 'other' : 'normal';
+}
+
+function bureauEntryKey_(group, projectKey) {
+  return group + '\u001f' + projectKey;
 }
 
 function bureauOutputByValue_(bureau) {
@@ -50,6 +66,7 @@ function bureauRecordFromInputRow_(row, rowNumber, batch, headerPositions) {
     projectName: bureauInputField_(row, headerPositions, 'projectName'),
     staffName: bureauInputField_(row, headerPositions, 'staffName'),
     introduction: bureauInputField_(row, headerPositions, 'introduction'),
+    publicationText: bureauInputField_(row, headerPositions, 'publicationText'),
     place: bureauInputField_(row, headerPositions, 'place'),
     scheduleOverride: '',
     firstDayStart: bureauInputField_(row, headerPositions, 'firstDayStart'),
@@ -74,9 +91,12 @@ function bureauRecordFromInputRow_(row, rowNumber, batch, headerPositions) {
     sourceSheet: batch.source.name,
     sourceType: batch.source.type,
     rowNumber: rowNumber,
-    changeStatus: '変更なし',
+    changeStatus: batch.source.type === APP_CONFIG.bureauOtherPublicationSourceType
+      ? ''
+      : '変更なし',
     lastChangeAt: ''
   };
+  record.group = bureauRecordGroup_(record);
   record.matchProjectKeys = [normalizeProjectNameKey_(record.projectName)];
   return record;
 }
@@ -374,7 +394,9 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau) {
   });
 
   var projectIndex = {};
-  baseRecords.forEach(function (record) {
+  baseRecords.filter(function (record) {
+    return !isOtherPublicationRecord_(record);
+  }).forEach(function (record) {
     addProjectIndexRecord_(projectIndex, record);
   });
 
@@ -435,9 +457,14 @@ function writeGeneratedHeaders_(sheet, headers) {
 }
 
 function bureauManualDefaultByHeader_(record, header) {
+  var isOtherPublication = isOtherPublicationRecord_(record);
   var values = {
-    '内部向け企画・取り組み名': record ? record.projectName : '',
-    '掲載文字情報': record ? record.introduction : '',
+    '内部向け企画・取り組み名': record && !isOtherPublication ? record.projectName : '',
+    '掲載文字情報': record
+      ? isOtherPublication
+        ? record.publicationText
+        : record.introduction
+      : '',
     'ページ名': '',
     '掲載媒体': '',
     '当媒チェック': '未確認',
@@ -620,11 +647,24 @@ function changedBureauSegments_(existingRow, mergedRow) {
 function mergeBureauRecordWithManualRow_(record, existingRow, existingHeaders, targetHeaders) {
   var existingIndex = existingHeaders ? buildHeaderIndex_(existingHeaders) : {};
   var existingIntroductionColumn = existingIndex[normalizeHeader_('企画紹介文')];
-  var introductionChanged = Boolean(existingRow) && existingIntroductionColumn !== undefined &&
+  var introductionChanged = !isOtherPublicationRecord_(record) &&
+    Boolean(existingRow) && existingIntroductionColumn !== undefined &&
     normalizeChangeValue_(existingRow[existingIntroductionColumn]) !==
       normalizeChangeValue_(record.introduction);
   return targetHeaders.map(function (header) {
-    if (!isBureauManualHeader_(header)) return bureauOutputValueByHeader_(record, header);
+    var existingColumn = existingIndex[normalizeHeader_(header)];
+    if (!isBureauManualHeader_(header)) {
+      var generatedValue = bureauOutputValueByHeader_(record, header);
+      if (
+        isOtherPublicationRecord_(record) &&
+        !normalizeText_(generatedValue) &&
+        existingRow &&
+        existingColumn !== undefined
+      ) {
+        return existingRow[existingColumn];
+      }
+      return generatedValue;
+    }
     if (
       introductionChanged &&
       (normalizeHeader_(header) === normalizeHeader_('当媒チェック') ||
@@ -632,7 +672,6 @@ function mergeBureauRecordWithManualRow_(record, existingRow, existingHeaders, t
     ) {
       return '未確認';
     }
-    var existingColumn = existingIndex[normalizeHeader_(header)];
     if (existingRow && existingColumn !== undefined) return existingRow[existingColumn];
     return bureauManualDefaultByHeader_(record, header);
   });
@@ -656,20 +695,51 @@ function manualReviewFromRecord_(record, reason) {
   };
 }
 
+function isBureauOtherPublicationSeparatorRow_(row, headerIndex) {
+  var pageColumn = headerIndex[normalizeHeader_('ページ名')];
+  var projectColumn = headerIndex[normalizeHeader_('企画名')];
+  return pageColumn !== undefined &&
+    normalizeText_(row[pageColumn]) === APP_CONFIG.bureauOtherPublicationSectionLabel &&
+    (projectColumn === undefined || !normalizeText_(row[projectColumn]));
+}
+
+function bureauOtherPublicationSeparatorRow_(headers) {
+  return headers.map(function (header) {
+    return normalizeHeader_(header) === normalizeHeader_('ページ名')
+      ? APP_CONFIG.bureauOtherPublicationSectionLabel
+      : '';
+  });
+}
+
+function bureauOtherPublicationSeparatorNumber_(values) {
+  if (!values || values.length < 2) return 0;
+  var headerIndex = buildHeaderIndex_(values[0]);
+  for (var offset = 1; offset < values.length; offset += 1) {
+    if (isBureauOtherPublicationSeparatorRow_(values[offset], headerIndex)) return offset + 1;
+  }
+  return 0;
+}
+
 function existingBureauEntries_(bureauOutputs) {
   var entries = [];
   bureauOutputs.forEach(function (output) {
     var headers = output.values[0] || [];
     var index = buildHeaderIndex_(headers);
     var projectColumn = index[normalizeHeader_('企画名')];
+    var group = 'normal';
     output.values.slice(1).forEach(function (row, offset) {
+      if (isBureauOtherPublicationSeparatorRow_(row, index)) {
+        group = 'other';
+        return;
+      }
       if (isBlankRow_(row)) return;
       entries.push({
         id: entries.length,
         output: output,
         row: row,
         rowNumber: offset + 2,
-        projectKey: normalizeProjectNameKey_(row[projectColumn])
+        projectKey: normalizeProjectNameKey_(row[projectColumn]),
+        group: group
       });
     });
   });
@@ -689,16 +759,19 @@ function planBureauDelta_(bureauOutputs, records) {
   var existing = existingBureauEntries_(bureauOutputs);
   var existingByKey = {};
   existing.forEach(function (entry) {
-    if (!existingByKey[entry.projectKey]) existingByKey[entry.projectKey] = [];
-    existingByKey[entry.projectKey].push(entry);
+    var entryKey = bureauEntryKey_(entry.group, entry.projectKey);
+    if (!existingByKey[entryKey]) existingByKey[entryKey] = [];
+    existingByKey[entryKey].push(entry);
   });
   var desiredCounts = {};
   var desiredAliases = {};
   records.forEach(function (record) {
     var finalKey = normalizeProjectNameKey_(record.projectName);
-    desiredCounts[finalKey] = (desiredCounts[finalKey] || 0) + 1;
+    var group = bureauRecordGroup_(record);
+    var finalEntryKey = bureauEntryKey_(group, finalKey);
+    desiredCounts[finalEntryKey] = (desiredCounts[finalEntryKey] || 0) + 1;
     (record.matchProjectKeys || [finalKey]).forEach(function (key) {
-      if (key) desiredAliases[key] = true;
+      if (key) desiredAliases[bureauEntryKey_(group, key)] = true;
     });
   });
 
@@ -715,10 +788,12 @@ function planBureauDelta_(bureauOutputs, records) {
   var consumed = {};
   records.forEach(function (record) {
     var finalKey = normalizeProjectNameKey_(record.projectName);
-    if (!finalKey || desiredCounts[finalKey] > 1) {
+    var group = bureauRecordGroup_(record);
+    var finalEntryKey = bureauEntryKey_(group, finalKey);
+    if (!finalKey || desiredCounts[finalEntryKey] > 1) {
       var sourceReason = !finalKey
         ? '企画名が空欄のため局別タブへ追加できません。'
-        : '同じ企画名の通常回答が複数あるため差分更新しません。';
+        : '同じ掲載区分と企画名の回答が複数あるため差分更新しません。';
       delta.skipped += 1;
       delta.reviews.push(manualReviewFromRecord_(record, sourceReason));
       delta.issues.push(makeIssue_('WARN', 'E_BUREAU_SOURCE_PROJECT_AMBIGUOUS', sourceReason, {
@@ -732,7 +807,7 @@ function planBureauDelta_(bureauOutputs, records) {
       return key && keys.indexOf(key) === index;
     });
     var candidates = uniqueEntries_(matchKeys.reduce(function (matches, key) {
-      return matches.concat(existingByKey[key] || []);
+      return matches.concat(existingByKey[bureauEntryKey_(group, key)] || []);
     }, [])).filter(function (entry) {
       return !consumed[entry.id];
     });
@@ -754,7 +829,8 @@ function planBureauDelta_(bureauOutputs, records) {
     if (candidates.length === 0) {
       delta.appends.push({
         output: targetOutput,
-        row: mergeBureauRecordWithManualRow_(record, null, null, targetOutput.values[0])
+        row: mergeBureauRecordWithManualRow_(record, null, null, targetOutput.values[0]),
+        record: record
       });
       delta.created += 1;
       return;
@@ -792,7 +868,7 @@ function planBureauDelta_(bureauOutputs, records) {
   });
 
   existing.forEach(function (entry) {
-    if (consumed[entry.id] || desiredAliases[entry.projectKey]) return;
+    if (consumed[entry.id] || desiredAliases[bureauEntryKey_(entry.group, entry.projectKey)]) return;
     var headers = entry.output.values[0];
     var index = buildHeaderIndex_(headers);
     var preservedRecord = {
@@ -815,13 +891,80 @@ function planBureauDelta_(bureauOutputs, records) {
   return delta;
 }
 
+function liveBureauEntriesForOutput_(output) {
+  var liveOutput = {
+    bureau: output.bureau,
+    sheet: output.sheet,
+    values: readSheetValues_(output.sheet)
+  };
+  return existingBureauEntries_([liveOutput]);
+}
+
+function writeBureauAppendGroup_(group) {
+  var sheet = group.output.sheet;
+  var headers = group.output.values[0];
+  if (group.normalRows.length > 0) {
+    var separatorRow = bureauOtherPublicationSeparatorNumber_(readSheetValues_(sheet));
+    var normalStartRow;
+    if (separatorRow > 0) {
+      sheet.insertRowsBefore(separatorRow, group.normalRows.length);
+      normalStartRow = separatorRow;
+    } else {
+      normalStartRow = sheet.getLastRow() + 1;
+    }
+    sheet.getRange(normalStartRow, 1, group.normalRows.length, headers.length)
+      .setValues(group.normalRows);
+  }
+  if (group.otherRows.length === 0) return;
+  var currentValues = readSheetValues_(sheet);
+  if (bureauOtherPublicationSeparatorNumber_(currentValues) === 0) {
+    var newSeparatorRow = sheet.getLastRow() + 1;
+    sheet.getRange(newSeparatorRow, 1, 1, headers.length)
+      .setValues([bureauOtherPublicationSeparatorRow_(headers)]);
+  }
+  var otherStartRow = sheet.getLastRow() + 1;
+  sheet.getRange(otherStartRow, 1, group.otherRows.length, headers.length)
+    .setValues(group.otherRows);
+}
+
+function sortAndStyleBureauSections_(output) {
+  var sheet = output.sheet;
+  var values = readSheetValues_(sheet);
+  if (values.length < 2) return;
+  var headers = values[0];
+  var index = buildHeaderIndex_(headers);
+  var separatorRow = bureauOtherPublicationSeparatorNumber_(values);
+  var lastRow = sheet.getLastRow();
+  var sortSpec = [
+    { column: index[normalizeHeader_('部署名')] + 1, ascending: true },
+    { column: index[normalizeHeader_('企画名')] + 1, ascending: true }
+  ];
+  var normalLastRow = separatorRow > 0 ? separatorRow - 1 : lastRow;
+  if (normalLastRow >= 3) {
+    sheet.getRange(2, 1, normalLastRow - 1, headers.length).sort(sortSpec);
+  }
+  if (separatorRow > 0 && lastRow > separatorRow + 1) {
+    sheet.getRange(separatorRow + 1, 1, lastRow - separatorRow, headers.length).sort(sortSpec);
+  }
+  if (separatorRow > 0) {
+    sheet.getRange(separatorRow, 1, 1, headers.length)
+      .clearDataValidations()
+      .setBackground(APP_CONFIG.bureauOtherPublicationSectionBackground)
+      .setFontColor('#ffffff')
+      .setFontWeight('bold');
+  }
+}
+
 function applyBureauDelta_(delta) {
+  var affectedOutputs = {};
   delta.updates.forEach(function (update) {
     update.segments.forEach(function (segment) {
       update.output.sheet.getRange(update.rowNumber, segment.startColumn, 1, segment.values.length)
         .setValues([segment.values]);
     });
+    affectedOutputs[update.output.bureau] = update.output;
   });
+
   var appendGroups = {};
   var approvedMoveSources = {};
   delta.appends.forEach(function (append) {
@@ -852,45 +995,40 @@ function applyBureauDelta_(delta) {
       approvedMoveSources[append.source.id] = append.record;
     }
     var key = append.output.bureau;
-    if (!appendGroups[key]) appendGroups[key] = { output: append.output, rows: [] };
-    appendGroups[key].rows.push(append.row);
+    if (!appendGroups[key]) {
+      appendGroups[key] = { output: append.output, normalRows: [], otherRows: [] };
+    }
+    var rowGroup = bureauRecordGroup_(append.record);
+    appendGroups[key][rowGroup === 'other' ? 'otherRows' : 'normalRows'].push(append.row);
+    affectedOutputs[key] = append.output;
   });
   Object.keys(appendGroups).forEach(function (key) {
-    var group = appendGroups[key];
-    var startRow = group.output.sheet.getLastRow() + 1;
-    group.output.sheet.getRange(startRow, 1, group.rows.length, group.rows[0].length)
-      .setValues(group.rows);
+    writeBureauAppendGroup_(appendGroups[key]);
   });
-  var deleteGroups = {};
+
   delta.deletes.forEach(function (entry) {
-    if (!approvedMoveSources[entry.id]) return;
-    var key = entry.output.bureau;
-    if (!deleteGroups[key]) deleteGroups[key] = { output: entry.output, rows: [] };
-    deleteGroups[key].rows.push(entry.rowNumber);
-  });
-  Object.keys(deleteGroups).forEach(function (key) {
-    var group = deleteGroups[key];
-    group.rows.sort(function (left, right) { return right - left; }).forEach(function (rowNumber) {
-      var headers = group.output.values[0];
-      var projectColumn = buildHeaderIndex_(headers)[normalizeHeader_('企画名')];
-      var currentProject = group.output.sheet.getRange(rowNumber, projectColumn + 1).getValue();
-      var expectedEntry = delta.deletes.find(function (entry) {
-        return entry.output === group.output && entry.rowNumber === rowNumber;
-      });
-      if (!expectedEntry || normalizeProjectNameKey_(currentProject) !== expectedEntry.projectKey) {
-        var afterMoveReason = '所属局移動後に削除対象行が変わったため、移動元を削除せず保持しました。';
-        var moveRecord = expectedEntry ? approvedMoveSources[expectedEntry.id] : null;
-        delta.skipped += 1;
-        if (moveRecord) delta.reviews.push(manualReviewFromRecord_(moveRecord, afterMoveReason));
-        delta.issues.push(makeIssue_('WARN', 'E_BUREAU_MOVE_SOURCE_CHANGED', afterMoveReason, {
-          sourceSheet: group.output.sheet.getName(),
-          rowNumber: rowNumber,
-          columnName: '企画名'
-        }));
-        return;
-      }
-      group.output.sheet.deleteRow(rowNumber);
+    var moveRecord = approvedMoveSources[entry.id];
+    if (!moveRecord) return;
+    var candidates = liveBureauEntriesForOutput_(entry.output).filter(function (candidate) {
+      return candidate.group === entry.group && candidate.projectKey === entry.projectKey;
     });
+    if (candidates.length !== 1) {
+      var afterMoveReason = '所属局移動後に削除対象行を一意に確認できないため、移動元を削除せず保持しました。';
+      delta.skipped += 1;
+      delta.reviews.push(manualReviewFromRecord_(moveRecord, afterMoveReason));
+      delta.issues.push(makeIssue_('WARN', 'E_BUREAU_MOVE_SOURCE_CHANGED', afterMoveReason, {
+        sourceSheet: entry.output.sheet.getName(),
+        rowNumber: entry.rowNumber,
+        columnName: '企画名'
+      }));
+      return;
+    }
+    entry.output.sheet.deleteRow(candidates[0].rowNumber);
+    affectedOutputs[entry.output.bureau] = entry.output;
+  });
+
+  Object.keys(affectedOutputs).forEach(function (key) {
+    sortAndStyleBureauSections_(affectedOutputs[key]);
   });
 }
 

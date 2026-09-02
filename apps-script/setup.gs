@@ -257,7 +257,7 @@ function setupProductionSchema() {
   var ui = SpreadsheetApp.getUi();
   var response = ui.prompt(
     'productionスキーマ作成確認',
-    '入力4タブには触れません。続行する場合は PRODUCTION と入力してください。',
+    '入力5タブには触れません。続行する場合は PRODUCTION と入力してください。',
     ui.ButtonSet.OK_CANCEL
   );
   if (

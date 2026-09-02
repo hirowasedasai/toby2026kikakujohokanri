@@ -177,6 +177,34 @@ function validateReviewOnlyInputSheet_(sheet) {
   };
 }
 
+function validateBureauInputSheet_(sheet, source) {
+  var values = readSheetValues_(sheet);
+  if (values.length === 0) {
+    throw makeAppError_('E_INPUT_HEADER_MISSING', sheet.getName() + 'のヘッダー行がありません。', {
+      sheetName: sheet.getName()
+    });
+  }
+  var resolution = resolveHeaders_(
+    values[0],
+    APP_CONFIG.bureauViewHeaderCandidates,
+    APP_CONFIG.requiredBureauOtherPublicationFields
+  );
+  if (resolution.missing.length > 0) {
+    throw makeAppError_(
+      'E_INPUT_HEADER_MISSING',
+      sheet.getName() + 'に必須ヘッダーがありません: ' + resolution.missing.join(', '),
+      { sheetName: sheet.getName(), missing: resolution.missing }
+    );
+  }
+  return {
+    sheet: sheet,
+    values: values,
+    columns: resolution.columns,
+    columnAlternatives: resolution.alternatives,
+    source: source
+  };
+}
+
 function preflightInternal_(options) {
   var spreadsheet = getBoundSpreadsheet_();
   var settings = validateEnvironment_(spreadsheet);
@@ -185,9 +213,11 @@ function preflightInternal_(options) {
   if (options.inputs) {
     APP_CONFIG.sheets.inputs.forEach(function (source) {
       var sheet = requireSheet_(spreadsheet, source.name);
-      var input = source.syncToMaster === false
-        ? validateReviewOnlyInputSheet_(sheet)
-        : validateInputSheet_(sheet, source);
+      var input = source.syncToBureaus === true
+        ? validateBureauInputSheet_(sheet, source)
+        : source.syncToMaster === false
+          ? validateReviewOnlyInputSheet_(sheet)
+          : validateInputSheet_(sheet, source);
       input.source = source;
       result.inputs.push(input);
     });

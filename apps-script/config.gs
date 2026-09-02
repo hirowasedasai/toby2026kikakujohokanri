@@ -13,6 +13,13 @@ var APP_CONFIG = Object.freeze({
         defaults: Object.freeze({ participation: '運営スタッフ企画' })
       }),
       Object.freeze({
+        name: '26運スタ企画その他掲載情報',
+        type: 'STAFF_OTHER_PUBLICATION',
+        priority: 10,
+        syncToMaster: false,
+        syncToBureaus: true
+      }),
+      Object.freeze({
         name: '26参参変更申請',
         type: 'PARTICIPANT_CHANGE',
         priority: 30,
@@ -164,6 +171,9 @@ var APP_CONFIG = Object.freeze({
     '確認済み',
     '修正必要'
   ]),
+  bureauOtherPublicationSourceType: 'STAFF_OTHER_PUBLICATION',
+  bureauOtherPublicationSectionLabel: 'その他掲載情報',
+  bureauOtherPublicationSectionBackground: '#5b73b7',
   bureauFrozenThroughHeader: '掲載媒体',
   bureauColumnWidths: Object.freeze({
     'ページ名': 170,
@@ -332,6 +342,7 @@ var APP_CONFIG = Object.freeze({
     projectName: Object.freeze(['企画名（26字以内）', '企画名']),
     staffName: Object.freeze(['担当者名']),
     introduction: Object.freeze(['企画紹介文（75字以内）']),
+    publicationText: Object.freeze(['掲載文字情報']),
     place: Object.freeze(['企画場所（正式名称）']),
     firstDayStart: Object.freeze(['11月7日(土)企画開始時間']),
     firstDayEnd: Object.freeze(['11月7日(土)企画終了時間']),
@@ -353,6 +364,13 @@ var APP_CONFIG = Object.freeze({
     afterImage: Object.freeze(['変更後（画像の場合はこちらに提出してください）']),
     notes: Object.freeze(['備考'])
   }),
+  requiredBureauOtherPublicationFields: Object.freeze([
+    'timestamp',
+    'bureau',
+    'department',
+    'projectName',
+    'staffName'
+  ]),
   staffChangeFields: Object.freeze([
     Object.freeze({ field: 'projectName', labels: Object.freeze(['企画名', '外部向け企画・取り組み名']) }),
     Object.freeze({ field: 'introduction', labels: Object.freeze(['企画紹介文', '企画紹介文（75字以内）']) }),
