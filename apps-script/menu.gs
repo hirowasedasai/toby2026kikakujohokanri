@@ -6,6 +6,7 @@ function onOpen() {
     .addItem('ドライラン: フォーム回答を同期', 'dryRunSyncMaster')
     .addItem('フォーム回答を同期', 'syncMaster')
     .addItem('参参一覧を更新', 'buildParticipantList')
+    .addItem('参参: 選択行を誤回答として除外', 'excludeSelectedParticipantResponses')
     .addItem('屋台情報まとめを更新', 'buildFoodStallSummary')
     .addItem('局別タブを差分同期', 'buildBureauOutputs')
     .addItem('全処理を実行', 'runAll')

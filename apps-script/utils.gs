@@ -123,6 +123,7 @@ function showSummary_(title, summary) {
     '実行ID: ' + (summary.executionId || '-'),
     '新規: ' + (summary.created || 0),
     '更新: ' + (summary.updated || 0),
+    '削除: ' + (summary.deleted || 0),
     'スキップ: ' + (summary.skipped || 0),
     '要確認: ' + (summary.needsReview || 0),
     'エラー: ' + (summary.errors || 0)

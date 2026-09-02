@@ -125,7 +125,34 @@ function participantTrackerKeyFromRow_(row, index) {
   );
 }
 
-function participantResponseGroups_(inputBatches) {
+function participantResponseId_(record) {
+  var sourceSheet = normalizeText_(record && record.sourceSheet);
+  var rowNumber = Number(record && record.rowNumber);
+  if (!sourceSheet || !rowNumber || rowNumber < 2) return '';
+  return 'PR-' + hashString_(sourceSheet + '|' + rowNumber) + '-' + rowNumber;
+}
+
+function participantDuplicateKey_(email, organization) {
+  var normalizedEmail = normalizeEmail_(email);
+  var normalizedOrganization = normalizeProjectNameKey_(organization);
+  if (!normalizedEmail || !normalizedOrganization) return '';
+  return 'participant-duplicate:' + normalizedEmail + '|' + normalizedOrganization;
+}
+
+function participantExclusionSetFromValues_(values) {
+  var excluded = {};
+  if (!values || values.length < 2) return excluded;
+  var index = buildHeaderIndex_(values[0]);
+  var idColumn = index[normalizeHeader_('回答識別子')];
+  if (idColumn === undefined) return excluded;
+  values.slice(1).forEach(function (row) {
+    var responseId = normalizeText_(row[idColumn]);
+    if (responseId) excluded[responseId] = true;
+  });
+  return excluded;
+}
+
+function participantResponsePlan_(inputBatches, excludedResponseIds) {
   var batch = inputBatches.find(function (candidate) {
     return candidate.source && candidate.source.type === 'FORM';
   });
@@ -133,54 +160,72 @@ function participantResponseGroups_(inputBatches) {
     throw makeAppError_('E_PARTICIPANT_FORM_MISSING', '参参フォーム回答を取得できません。');
   }
   var collected = collectInputRecords_([batch]);
-  var groups = {};
-  var keysByBase = {};
-  collected.records.forEach(function (record) {
-    var key = buildProvisionalKey_(record.email, record.participation, record.projectName);
-    if (!key) return;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(record);
+  var excluded = excludedResponseIds || {};
+  var records = [];
+  var byId = {};
+  var byTrackerKey = {};
+  var byBase = {};
+  var duplicateGroups = {};
+  collected.records.sort(function (left, right) {
+    return left.rowNumber - right.rowNumber;
+  }).forEach(function (record) {
+    record.responseId = participantResponseId_(record);
+    record.trackerKey = buildProvisionalKey_(record.email, record.participation, record.projectName);
+    record.baseKey = participantBaseKey_(record.email, record.participation);
+    record.duplicateKey = participantDuplicateKey_(record.email, record.organization);
+    if (!record.responseId || excluded[record.responseId]) {
+      collected.skipped += 1;
+      return;
+    }
+    records.push(record);
+    byId[record.responseId] = record;
+    if (!byTrackerKey[record.trackerKey]) byTrackerKey[record.trackerKey] = [];
+    byTrackerKey[record.trackerKey].push(record);
     var baseKey = participantBaseKey_(record.email, record.participation);
-    if (!keysByBase[baseKey]) keysByBase[baseKey] = [];
-    if (keysByBase[baseKey].indexOf(key) < 0) keysByBase[baseKey].push(key);
+    if (!byBase[baseKey]) byBase[baseKey] = [];
+    byBase[baseKey].push(record);
+    if (record.duplicateKey) {
+      if (!duplicateGroups[record.duplicateKey]) duplicateGroups[record.duplicateKey] = [];
+      duplicateGroups[record.duplicateKey].push(record);
+    }
   });
-  Object.keys(keysByBase).forEach(function (baseKey) {
-    keysByBase[baseKey].sort();
-  });
-  var autoResolvedKeys = {};
-  Object.keys(groups).forEach(function (key) {
-    var resolution = resolveLatestResubmission_(groups[key]);
-    if (!resolution.resolved) return;
-    collected.skipped += groups[key].length - 1;
-    groups[key] = [resolution.record];
-    autoResolvedKeys[key] = true;
-    var hasHeaderTimestampPlaceholder =
-      resolution.reason === 'header-timestamp-placeholder';
+  var duplicateKeys = {};
+  Object.keys(duplicateGroups).forEach(function (key) {
+    var group = duplicateGroups[key];
+    if (group.length < 2) return;
+    duplicateKeys[key] = true;
     collected.issues.push(
       makeIssue_(
-        'INFO',
-        hasHeaderTimestampPlaceholder
-          ? 'I_RESUBMISSION_HEADER_TIMESTAMP_SELECTED'
-          : 'I_RESUBMISSION_LATEST_SELECTED',
-        hasHeaderTimestampPlaceholder
-          ? '同一企画の旧回答に回答日時ヘッダー文字列が含まれるため、正常な回答日時を持つ回答を採用しました。'
-          : '同一企画の再送として、回答日時が一意に新しい回答を採用しました。',
+        'WARN',
+        'E_PARTICIPANT_EMAIL_NAME_DUPLICATE',
+        '同じメールアドレスと参参名のフォーム回答が複数あるため、人力確認が必要です。',
         {
-          sourceSheet: resolution.record.sourceSheet,
-          rowNumber: resolution.record.rowNumber,
-          columnName: 'タイムスタンプ'
+          sourceSheet: group[0].sourceSheet,
+          rowNumber: group[0].rowNumber,
+          columnName: 'メールアドレス,参参名'
         }
       )
     );
   });
   return {
     batch: batch,
-    groups: groups,
-    keysByBase: keysByBase,
-    autoResolvedKeys: autoResolvedKeys,
+    records: records,
+    byId: byId,
+    byTrackerKey: byTrackerKey,
+    byBase: byBase,
+    duplicateKeys: duplicateKeys,
     issues: collected.issues.slice(),
-    skipped: collected.skipped
+    skipped: collected.skipped,
+    needsReview: records.filter(function (record) {
+      return Boolean(duplicateKeys[record.duplicateKey]);
+    }).length
   };
+}
+
+function participantResultForResponse_(response, responsePlan) {
+  return responsePlan.duplicateKeys[response.duplicateKey]
+    ? APP_CONFIG.participantDuplicateResult
+    : '一致';
 }
 
 function participantSuggestedStatus_(currentStatus, suggestedStatus) {
@@ -204,10 +249,13 @@ function participantDesiredRow_(existingRow, index, response, result, currentIso
     '提出状況',
     participantSuggestedStatus_(currentStatus, suggestedStatus)
   );
-  setParticipantTrackerCell_(desired, index, '参参名・フォーム回答', response ? response.organization : '');
-  setParticipantTrackerCell_(desired, index, '参参名・確定版', response ? response.organization : '');
-  setParticipantTrackerCell_(desired, index, '企画名・フォーム回答', response ? response.projectName : '');
-  setParticipantTrackerCell_(desired, index, '企画名・確定版', response ? response.projectName : '');
+  if (response) {
+    setParticipantTrackerCell_(desired, index, '参参名・フォーム回答', response.organization);
+    setParticipantTrackerCell_(desired, index, '参参名・確定版', response.organization);
+    setParticipantTrackerCell_(desired, index, '企画名・フォーム回答', response.projectName);
+    setParticipantTrackerCell_(desired, index, '企画名・確定版', response.projectName);
+    setParticipantTrackerCell_(desired, index, '回答識別子', response.responseId);
+  }
   setParticipantTrackerCell_(desired, index, '照合結果', result);
 
   var trackedHeaders = ['提出状況'].concat(
@@ -254,59 +302,50 @@ function participantIssue_(code, message, rowNumber, columnName, sourceSheet) {
   });
 }
 
-function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
+function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso, excludedResponseIds) {
   var headers = trackerValues[0];
   var index = buildHeaderIndex_(headers);
-  var responsePlan = participantResponseGroups_(inputBatches);
+  var responsePlan = participantResponsePlan_(inputBatches, excludedResponseIds);
   var existing = trackerValues.slice(1).map(function (row, offset) {
     var copy = row.slice(0, headers.length);
     while (copy.length < headers.length) copy.push('');
     return {
       row: copy,
       rowNumber: offset + 2,
+      responseId: normalizeText_(participantTrackerCell_(copy, index, '回答識別子')),
       key: participantTrackerKeyFromRow_(copy, index),
       baseKey: participantBaseKey_(
         participantTrackerCell_(copy, index, 'メールアドレス'),
         participantTrackerCell_(copy, index, '参加企画')
       ),
-      result: normalizeText_(participantTrackerCell_(copy, index, '照合結果')),
-      legacyPlaceholder: false
+      result: normalizeText_(participantTrackerCell_(copy, index, '照合結果'))
     };
   }).filter(function (record) {
     return !isBlankRow_(record.row);
   });
-  var existingByKey = {};
+  var existingByResponseId = {};
   existing.forEach(function (record) {
-    if (!record.key) return;
-    if (!existingByKey[record.key]) existingByKey[record.key] = [];
-    existingByKey[record.key].push(record);
-  });
-
-  var claimedLegacyKeys = {};
-  existing.forEach(function (record) {
-    if (
-      record.key ||
-      record.result !== 'フォーム回答重複' ||
-      !record.baseKey
-    ) return;
-    var candidates = (responsePlan.keysByBase[record.baseKey] || []).filter(function (key) {
-      return !existingByKey[key] && !claimedLegacyKeys[key];
-    });
-    if (candidates.length === 0) return;
-    record.key = candidates[0];
-    record.legacyPlaceholder = true;
-    claimedLegacyKeys[record.key] = true;
-    existingByKey[record.key] = [record];
+    if (!record.responseId) return;
+    if (!existingByResponseId[record.responseId]) existingByResponseId[record.responseId] = [];
+    existingByResponseId[record.responseId].push(record);
   });
 
   var updates = [];
   var appends = [];
+  var deletes = [];
   var issues = responsePlan.issues.slice();
-  var usedResponseKeys = {};
-  var needsReview = 0;
+  var claimedResponseIds = {};
+  var needsReview = responsePlan.needsReview;
   var skipped = responsePlan.skipped;
 
   function planExistingUpdate(record, response, result) {
+    if (
+      (record.result === APP_CONFIG.participantDuplicateResult || record.result === 'フォーム回答重複') &&
+      result === '一致' &&
+      normalizeText_(participantTrackerCell_(record.row, index, '提出状況')) === '確認中'
+    ) {
+      setParticipantTrackerCell_(record.row, index, '提出状況', '');
+    }
     var desired = participantDesiredRow_(record.row, index, response, result, currentIso);
     var segments = changedParticipantSegments_(record.row, desired, headers);
     if (segments.length > 0) {
@@ -317,93 +356,112 @@ function planParticipantTrackerDelta_(trackerValues, inputBatches, currentIso) {
   }
 
   existing.forEach(function (record) {
-    if (!record.key) {
-      planExistingUpdate(record, null, '一覧行不備');
-      needsReview += 1;
-      issues.push(participantIssue_(
-        'E_PARTICIPANT_TRACKER_ROW_INVALID',
-        '参参一覧のメールアドレス、参加企画、または企画名が空です。',
-        record.rowNumber,
-        'メールアドレス,参加企画,企画名'
-      ));
+    if (record.responseId) {
+      if (excludedResponseIds && excludedResponseIds[record.responseId]) {
+        deletes.push(record.rowNumber);
+        return;
+      }
+      if (existingByResponseId[record.responseId].length > 1) {
+        var firstExisting = existingByResponseId[record.responseId][0];
+        if (firstExisting !== record) {
+          planExistingUpdate(record, null, '一覧内重複');
+          needsReview += 1;
+          issues.push(participantIssue_(
+            'E_PARTICIPANT_TRACKER_RESPONSE_ID_DUPLICATE',
+            '参参一覧に同じ回答識別子の行が複数あります。',
+            record.rowNumber,
+            '回答識別子'
+          ));
+          return;
+        }
+      }
+      var identifiedResponse = responsePlan.byId[record.responseId];
+      if (!identifiedResponse) {
+        planExistingUpdate(record, null, '回答元不明');
+        needsReview += 1;
+        issues.push(participantIssue_(
+          'E_PARTICIPANT_RESPONSE_MISSING',
+          '参参一覧の回答識別子に対応するフォーム回答がありません。',
+          record.rowNumber,
+          '回答識別子'
+        ));
+        return;
+      }
+      claimedResponseIds[record.responseId] = true;
+      planExistingUpdate(
+        record,
+        identifiedResponse,
+        participantResultForResponse_(identifiedResponse, responsePlan)
+      );
       return;
     }
-    if (existingByKey[record.key].length > 1) {
-      planExistingUpdate(record, null, '一覧内重複');
-      needsReview += 1;
-      issues.push(participantIssue_(
-        'E_PARTICIPANT_TRACKER_DUPLICATE',
-        '参参一覧に同じメールアドレス、参加企画、企画名の行が複数あります。',
-        record.rowNumber,
-        'メールアドレス,参加企画,企画名'
-      ));
+    var candidates = (responsePlan.byTrackerKey[record.key] || []).filter(function (response) {
+      return !claimedResponseIds[response.responseId];
+    });
+    if (candidates.length === 0 && record.result === 'フォーム回答重複' && record.baseKey) {
+      candidates = (responsePlan.byBase[record.baseKey] || []).filter(function (response) {
+        return !claimedResponseIds[response.responseId];
+      });
+    }
+    if (candidates.length > 0) {
+      var claimedResponse = candidates[0];
+      claimedResponseIds[claimedResponse.responseId] = true;
+      planExistingUpdate(
+        record,
+        claimedResponse,
+        participantResultForResponse_(claimedResponse, responsePlan)
+      );
       return;
     }
-    var responses = responsePlan.groups[record.key] || [];
-    if (responses.length === 0) {
-      planExistingUpdate(record, null, '未提出');
+    if (record.key) {
+      if ((responsePlan.byTrackerKey[record.key] || []).length > 0) {
+        planExistingUpdate(record, null, '一覧内重複');
+        needsReview += 1;
+        issues.push(participantIssue_(
+          'E_PARTICIPANT_TRACKER_DUPLICATE',
+          '参参一覧に同じメールアドレス、参加企画、企画名の余分な行があります。',
+          record.rowNumber,
+          'メールアドレス,参加企画,企画名'
+        ));
+      } else {
+        planExistingUpdate(record, null, '未提出');
+      }
       return;
     }
-    usedResponseKeys[record.key] = true;
-    if (responses.length > 1) {
-      planExistingUpdate(record, null, 'フォーム回答重複');
-      needsReview += 1;
-      skipped += responses.length - 1;
-      issues.push(participantIssue_(
-        'E_PARTICIPANT_FORM_DUPLICATE',
-        '同じメールアドレス、参加企画、企画名のフォーム回答が複数あるため自動採用しません。',
-        responses[0].rowNumber,
-        'メールアドレス,参加企画,企画名',
-        responsePlan.batch.source.name
-      ));
-      return;
-    }
-    if (
-      (record.legacyPlaceholder || responsePlan.autoResolvedKeys[record.key]) &&
-      record.result === 'フォーム回答重複' &&
-      normalizeText_(participantTrackerCell_(record.row, index, '提出状況')) === '確認中'
-    ) {
-      setParticipantTrackerCell_(record.row, index, '提出状況', '');
-    }
-    planExistingUpdate(record, responses[0], '一致');
+    planExistingUpdate(record, null, '一覧行不備');
+    needsReview += 1;
+    issues.push(participantIssue_(
+      'E_PARTICIPANT_TRACKER_ROW_INVALID',
+      '参参一覧のメールアドレス、参加企画、または企画名が空です。',
+      record.rowNumber,
+      'メールアドレス,参加企画,企画名'
+    ));
   });
 
-  Object.keys(responsePlan.groups).sort().forEach(function (key) {
-    if (usedResponseKeys[key] || existingByKey[key]) return;
-    var responses = responsePlan.groups[key];
-    var response = responses.length === 1 ? responses[0] : null;
+  responsePlan.records.forEach(function (response) {
+    if (claimedResponseIds[response.responseId]) return;
     var row = new Array(headers.length).fill('');
-    var first = responses[0];
-    setParticipantTrackerCell_(row, index, '参加企画', first.participation);
-    setParticipantTrackerCell_(row, index, 'メールアドレス', first.email);
+    setParticipantTrackerCell_(row, index, '参加企画', response.participation);
+    setParticipantTrackerCell_(row, index, 'メールアドレス', response.email);
     row = participantDesiredRow_(
       row,
       index,
       response,
-      response ? '一致' : 'フォーム回答重複',
+      participantResultForResponse_(response, responsePlan),
       currentIso
     );
     appends.push(row);
-    if (!response) {
-      needsReview += 1;
-      skipped += responses.length - 1;
-      issues.push(participantIssue_(
-        'E_PARTICIPANT_FORM_DUPLICATE',
-        '同じメールアドレス、参加企画、企画名のフォーム回答が複数あるため自動採用しません。',
-        first.rowNumber,
-        'メールアドレス,参加企画,企画名',
-        responsePlan.batch.source.name
-      ));
-    }
   });
 
   return {
     updates: updates,
     appends: appends,
+    deletes: deletes,
     issues: issues,
     summary: {
       created: appends.length,
       updated: updates.length,
+      deleted: deletes.length,
       skipped: skipped,
       needsReview: needsReview,
       errors: issues.filter(function (issue) { return issue.level !== 'INFO'; }).length
@@ -417,6 +475,11 @@ function applyParticipantTrackerDelta_(sheet, delta, width) {
       sheet.getRange(update.rowNumber, segment.startColumn, 1, segment.values.length)
         .setValues([segment.values]);
     });
+  });
+  (delta.deletes || []).slice().sort(function (left, right) {
+    return right - left;
+  }).forEach(function (rowNumber) {
+    sheet.deleteRow(rowNumber);
   });
   if (delta.appends.length > 0) {
     sheet.getRange(sheet.getLastRow() + 1, 1, delta.appends.length, width)
@@ -452,7 +515,8 @@ function performBuildParticipantTracker_(suppliedPreflight, executionId) {
   var plan = planParticipantTrackerDelta_(
     preflight.participantOutput.values,
     preflight.inputs,
-    nowIso_()
+    nowIso_(),
+    participantExclusionSetFromValues_(preflight.participantExclusions.values)
   );
   applyParticipantTrackerDelta_(
     preflight.participantOutput.sheet,
@@ -547,6 +611,208 @@ function executeBuildFromUi_(outputType) {
 
 function buildParticipantList() {
   return executeBuildFromUi_('participant');
+}
+
+function participantResponseIdsFromSelection_(headers, values) {
+  var index = buildHeaderIndex_(headers);
+  var idColumn = index[normalizeHeader_('回答識別子')];
+  var resultColumn = index[normalizeHeader_('照合結果')];
+  if (idColumn === undefined || resultColumn === undefined) return [];
+  var seen = {};
+  var ids = [];
+  values.forEach(function (row) {
+    if (normalizeText_(row[resultColumn]) !== APP_CONFIG.participantDuplicateResult) return;
+    var responseId = normalizeText_(row[idColumn]);
+    if (!responseId || seen[responseId]) return;
+    seen[responseId] = true;
+    ids.push(responseId);
+  });
+  return ids;
+}
+
+function participantFullySelectedDuplicateGroupCount_(headers, values, selectedResponseIds) {
+  var index = buildHeaderIndex_(headers);
+  var idColumn = index[normalizeHeader_('回答識別子')];
+  var resultColumn = index[normalizeHeader_('照合結果')];
+  if (idColumn === undefined || resultColumn === undefined) return 0;
+  var selected = {};
+  selectedResponseIds.forEach(function (responseId) {
+    selected[normalizeText_(responseId)] = true;
+  });
+  var totals = {};
+  var selectedTotals = {};
+  values.forEach(function (row) {
+    if (normalizeText_(row[resultColumn]) !== APP_CONFIG.participantDuplicateResult) return;
+    var responseId = normalizeText_(row[idColumn]);
+    var duplicateKey = participantDuplicateKey_(
+      participantTrackerCell_(row, index, 'メールアドレス'),
+      participantTrackerCell_(row, index, '参参名・フォーム回答') ||
+        participantTrackerCell_(row, index, '参参名・確定版')
+    );
+    if (!responseId || !duplicateKey) return;
+    totals[duplicateKey] = (totals[duplicateKey] || 0) + 1;
+    if (selected[responseId]) {
+      selectedTotals[duplicateKey] = (selectedTotals[duplicateKey] || 0) + 1;
+    }
+  });
+  return Object.keys(selectedTotals).filter(function (duplicateKey) {
+    return selectedTotals[duplicateKey] >= totals[duplicateKey];
+  }).length;
+}
+
+function appendParticipantExclusions_(exclusionOutput, responseIds, currentIso) {
+  var headers = exclusionOutput.values[0];
+  var index = buildHeaderIndex_(headers);
+  var existing = participantExclusionSetFromValues_(exclusionOutput.values);
+  var rows = responseIds.filter(function (responseId) {
+    return !existing[responseId];
+  }).map(function (responseId) {
+    var row = new Array(headers.length).fill('');
+    row[index[normalizeHeader_('回答識別子')]] = responseId;
+    row[index[normalizeHeader_('除外日時')]] = currentIso;
+    row[index[normalizeHeader_('除外理由')]] = '誤回答として手動除外';
+    return row;
+  });
+  if (rows.length > 0) {
+    exclusionOutput.sheet
+      .getRange(exclusionOutput.sheet.getLastRow() + 1, 1, rows.length, headers.length)
+      .setValues(rows);
+  }
+  return rows.length;
+}
+
+function excludeSelectedParticipantResponses() {
+  var executionId = newExecutionId_();
+  var spreadsheet = getBoundSpreadsheet_();
+  var ui = SpreadsheetApp.getUi();
+  try {
+    validateEnvironment_(spreadsheet);
+    var sheet = spreadsheet.getActiveSheet();
+    if (!sheet || sheet.getName() !== APP_CONFIG.sheets.participantOutput) {
+      throw makeAppError_(
+        'E_PARTICIPANT_EXCLUSION_WRONG_SHEET',
+        '参参一覧で誤回答の行を選択してから実行してください。'
+      );
+    }
+    var validation = validateExactHeaders_(
+      sheet,
+      APP_CONFIG.participantOutputHeaders,
+      'E_OUTPUT_HEADER_MISSING'
+    );
+    var selection = sheet.getActiveRange();
+    var startRow = Math.max(selection ? selection.getRow() : 0, 2);
+    var endRow = selection ? selection.getLastRow() : 0;
+    if (!selection || endRow < 2 || startRow > endRow) {
+      throw makeAppError_(
+        'E_PARTICIPANT_EXCLUSION_NO_SELECTION',
+        '参参一覧のデータ行を1行以上選択してください。'
+      );
+    }
+    var selectedValues = sheet.getRange(
+      startRow,
+      1,
+      endRow - startRow + 1,
+      validation.values[0].length
+    ).getValues();
+    var responseIds = participantResponseIdsFromSelection_(
+      validation.values[0],
+      selectedValues
+    );
+    if (responseIds.length === 0) {
+      throw makeAppError_(
+        'E_PARTICIPANT_EXCLUSION_ID_MISSING',
+        '選択行に同一メアド・参参名の警告中フォーム回答がありません。先に参参一覧を更新してください。'
+      );
+    }
+    if (participantFullySelectedDuplicateGroupCount_(
+      validation.values[0],
+      validation.values.slice(1),
+      responseIds
+    ) > 0) {
+      throw makeAppError_(
+        'E_PARTICIPANT_EXCLUSION_WOULD_REMOVE_ALL',
+        '同じメールアドレスと参参名の回答をすべて除外することはできません。正しい1件を選択から外してください。'
+      );
+    }
+    var confirmation = ui.alert(
+      '参参の誤回答を除外',
+      '選択したフォーム回答 ' + responseIds.length + ' 件を参参一覧から除外します。' +
+        'フォーム回答原本は変更しません。続行しますか？',
+      ui.ButtonSet.YES_NO
+    );
+    if (confirmation !== ui.Button.YES) return { executionId: executionId, cancelled: true };
+
+    var result = withScriptLock_(function () {
+      var preflight = preflightInternal_({
+        inputs: true,
+        master: false,
+        outputs: true,
+        log: true
+      });
+      var selectedIdSet = {};
+      responseIds.forEach(function (responseId) {
+        selectedIdSet[responseId] = true;
+      });
+      var currentHeaders = preflight.participantOutput.values[0];
+      var currentIndex = buildHeaderIndex_(currentHeaders);
+      var currentSelectedRows = preflight.participantOutput.values.slice(1).filter(function (row) {
+        var responseId = normalizeText_(
+          participantTrackerCell_(row, currentIndex, '回答識別子')
+        );
+        return Boolean(selectedIdSet[responseId]);
+      });
+      var currentResponseIds = participantResponseIdsFromSelection_(
+        currentHeaders,
+        currentSelectedRows
+      );
+      if (currentResponseIds.length !== responseIds.length) {
+        throw makeAppError_(
+          'E_PARTICIPANT_EXCLUSION_SELECTION_STALE',
+          '選択後に参参一覧が更新されました。現在の警告行を確認して選択し直してください。'
+        );
+      }
+      if (participantFullySelectedDuplicateGroupCount_(
+        currentHeaders,
+        preflight.participantOutput.values.slice(1),
+        currentResponseIds
+      ) > 0) {
+        throw makeAppError_(
+          'E_PARTICIPANT_EXCLUSION_WOULD_REMOVE_ALL',
+          '同じメールアドレスと参参名の回答をすべて除外することはできません。正しい1件を選択から外してください。'
+        );
+      }
+      var excluded = appendParticipantExclusions_(
+        preflight.participantExclusions,
+        currentResponseIds,
+        nowIso_()
+      );
+      var refreshed = preflightInternal_({
+        inputs: true,
+        master: false,
+        outputs: true,
+        log: true
+      });
+      var summary = performBuildParticipantTracker_(refreshed, executionId);
+      summary.excluded = excluded;
+      return summary;
+    });
+    ui.alert(
+      '参参の誤回答を除外しました',
+      '除外登録: ' + result.excluded + ' 件\n' +
+        '一覧から削除: ' + (result.deleted || 0) + ' 件\n' +
+        '残りの要確認: ' + (result.needsReview || 0) + ' 件',
+      ui.ButtonSet.OK
+    );
+    return result;
+  } catch (error) {
+    safeAppendFailureLog_('participant:excludeSelected', executionId, error);
+    ui.alert(
+      '参参の誤回答除外に失敗しました',
+      (error.code || 'E_UNEXPECTED') + ': ' + sanitizeLogText_(error.message),
+      ui.ButtonSet.OK
+    );
+    return { executionId: executionId, errorCode: error.code || 'E_UNEXPECTED' };
+  }
 }
 
 function buildFoodStallSummary() {

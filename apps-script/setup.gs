@@ -154,10 +154,42 @@ function applyParticipantSheetPresentation_(sheet, headerIndex) {
     if (column !== undefined) sheet.setColumnWidth(column + 1, APP_CONFIG.participantColumnWidths[header]);
   });
   sheet.showColumns(1, APP_CONFIG.participantOutputHeaders.length);
-  ['参参名・フォーム回答', '企画名・フォーム回答'].forEach(function (header) {
+  ['参参名・フォーム回答', '企画名・フォーム回答', '回答識別子'].forEach(function (header) {
     var column = headerIndex[normalizeHeader_(header)];
     if (column !== undefined) sheet.hideColumns(column + 1);
   });
+  ensureParticipantDuplicateWarningRule_(sheet, headerIndex);
+}
+
+function ensureParticipantDuplicateWarningRule_(sheet, headerIndex) {
+  var statusColumn = headerIndex[normalizeHeader_('提出状況')];
+  var resultColumn = headerIndex[normalizeHeader_('照合結果')];
+  var responseIdColumn = headerIndex[normalizeHeader_('回答識別子')];
+  var dataRowCount = sheet.getMaxRows() - 1;
+  if (
+    statusColumn === undefined ||
+    resultColumn === undefined ||
+    responseIdColumn === undefined ||
+    dataRowCount < 1
+  ) return;
+  var formula = '=AND($' + columnLetter_(statusColumn + 1) + '2="確認中",$' +
+    columnLetter_(resultColumn + 1) + '2="' + APP_CONFIG.participantDuplicateResult + '")';
+  var rules = sheet.getConditionalFormatRules().filter(function (rule) {
+    var condition = rule.getBooleanCondition();
+    if (!condition) return true;
+    if (condition.getCriteriaType() !== SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA) return true;
+    return !condition.getCriteriaValues().some(function (value) {
+      return normalizeText_(value) === formula;
+    });
+  });
+  rules.push(
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(formula)
+      .setBackground(APP_CONFIG.participantDuplicateWarningBackground)
+      .setRanges([sheet.getRange(2, 1, dataRowCount, responseIdColumn)])
+      .build()
+  );
+  sheet.setConditionalFormatRules(rules);
 }
 
 function ensureParticipantSchemaSheet_(spreadsheet) {
@@ -169,6 +201,10 @@ function ensureParticipantSchemaSheet_(spreadsheet) {
   } else if (
     headerSetMatches_(values[0], APP_CONFIG.participantOutputHeaders) &&
     !headerOrderMatches_(values[0], APP_CONFIG.participantOutputHeaders)
+  ) {
+    writeParticipantSchema_(sheet, migrateParticipantRowsByHeader_(values));
+  } else if (
+    headerSetMatches_(values[0], APP_CONFIG.previousParticipantTrackerHeadersWithoutResponseId)
   ) {
     writeParticipantSchema_(sheet, migrateParticipantRowsByHeader_(values));
   } else if (headerSetMatches_(values[0], APP_CONFIG.previousParticipantTrackerHeaders)) {
@@ -186,6 +222,16 @@ function ensureParticipantSchemaSheet_(spreadsheet) {
     'E_EXISTING_SCHEMA_MISMATCH'
   );
   applyParticipantSheetPresentation_(sheet, validation.headerIndex);
+}
+
+function ensureParticipantExclusionSheet_(spreadsheet) {
+  ensureSchemaSheet_(
+    spreadsheet,
+    APP_CONFIG.sheets.participantExclusions,
+    APP_CONFIG.participantExclusionHeaders
+  );
+  var sheet = spreadsheet.getSheetByName(APP_CONFIG.sheets.participantExclusions);
+  if (!sheet.isSheetHidden()) sheet.hideSheet();
 }
 
 function ensureBureauSchemaSheet_(spreadsheet, sheetName) {
@@ -217,6 +263,7 @@ function setupSchemaInternal_() {
   validateEnvironment_(spreadsheet);
   ensureSchemaSheet_(spreadsheet, APP_CONFIG.sheets.master, APP_CONFIG.masterHeaders);
   ensureParticipantSchemaSheet_(spreadsheet);
+  ensureParticipantExclusionSheet_(spreadsheet);
   ensureSchemaSheet_(spreadsheet, APP_CONFIG.sheets.foodOutput, APP_CONFIG.foodOutputHeaders);
   APP_CONFIG.sheets.bureauOutputs.forEach(function (output) {
     ensureBureauSchemaSheet_(spreadsheet, output.name);
@@ -234,7 +281,7 @@ function setupStagingSchema() {
   setupSchemaInternal_();
   SpreadsheetApp.getUi().alert(
     'stagingスキーマ作成完了',
-    'マスター、出力、局別タブ、要手動確認、ログのスキーマを確認しました。入力タブは作成・変更していません。',
+    'マスター、出力、参参除外管理、局別タブ、要手動確認、ログのスキーマを確認しました。入力タブは作成・変更していません。',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -270,7 +317,7 @@ function setupProductionSchema() {
   setupSchemaInternal_();
   ui.alert(
     'productionスキーマ作成完了',
-    'マスター、出力、局別タブ、要手動確認、ログのスキーマを確認しました。入力タブは作成・変更していません。',
+    'マスター、出力、参参除外管理、局別タブ、要手動確認、ログのスキーマを確認しました。入力タブは作成・変更していません。',
     ui.ButtonSet.OK
   );
 }

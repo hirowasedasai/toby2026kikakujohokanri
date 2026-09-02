@@ -313,6 +313,10 @@ test('参参一覧の同一内容再同期は更新せず、人が付けた状�
   existing[headers.indexOf('企画名・確定版')] = '合成企画';
   existing[headers.indexOf('照合結果')] = '一致';
   existing[headers.indexOf('最終同期日時')] = 'OLD-TIME';
+  existing[headers.indexOf('回答識別子')] = context.participantResponseId_({
+    sourceSheet: '26参参フォーム回答',
+    rowNumber: 2
+  });
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [['cancelled@example.com', '教室企画', '合成参加団体', '合成企画']]
@@ -439,196 +443,195 @@ test('参参名はフォーム回答を確定版として既存行と新規行�
   assert.deepEqual(delta.issues, []);
 });
 
-test('参参一覧は同じ提出者の別企画を別行として扱う', () => {
+test('同じメアドと参参名の複数回答は企画が違っても全件を残して警告する', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
-  const unsubmitted = new Array(headers.length).fill('');
-  unsubmitted[headers.indexOf('参加企画')] = '教室企画';
-  unsubmitted[headers.indexOf('メールアドレス')] = 'waiting@example.com';
-  unsubmitted[headers.indexOf('企画名・フォーム回答')] = '未提出企画';
-  unsubmitted[headers.indexOf('企画名・確定版')] = '未提出企画';
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [
       ['multiple@example.com', '教室企画', '同一団体', '企画A'],
-      ['multiple@example.com', '教室企画', '同一団体', '企画B']
+      ['multiple@example.com', 'ステージ企画', '同一団体', '企画B']
     ]
   );
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
 
-  const delta = plain(context.planParticipantTrackerDelta_(
-    [headers, unsubmitted],
-    [batch],
-    'TIME'
-  ));
-  const waiting = delta.updates[0].row;
-
-  assert.equal(waiting[headers.indexOf('提出状況')], '未提出');
-  assert.equal(waiting[headers.indexOf('照合結果')], '未提出');
   assert.equal(delta.appends.length, 2);
-  assert.deepEqual(
-    delta.appends.map((row) => row[headers.indexOf('企画名・確定版')]).sort(),
-    ['企画A', '企画B']
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('提出状況')] === '確認中'
+  ), true);
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名重複'
+  ), true);
+  assert.equal(new Set(delta.appends.map(
+    (row) => row[headers.indexOf('回答識別子')]
+  )).size, 2);
+  assert.equal(delta.summary.needsReview, 2);
+  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_EMAIL_NAME_DUPLICATE');
+});
+
+test('重複警告はメールの大小文字と参参名の空白・文字幅を正規化して判定する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['Case@example.com', '教室企画', '合成　団体', '企画A'],
+      ['case@example.com', 'ステージ企画', '合成 団体', '企画B']
+    ]
   );
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+
+  assert.equal(delta.summary.needsReview, 2);
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名重複'
+  ), true);
+});
+
+test('同じメアドでも参参名が違えば警告せず各回答を残す', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['shared@example.com', '教室企画', '団体A', '同一企画'],
+      ['shared@example.com', '教室企画', '団体B', '同一企画']
+    ]
+  );
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+
+  assert.equal(delta.appends.length, 2);
   assert.equal(delta.appends.every(
     (row) => row[headers.indexOf('提出状況')] === '提出済み'
+  ), true);
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('照合結果')] === '一致'
   ), true);
   assert.equal(delta.summary.needsReview, 0);
   assert.deepEqual(delta.issues, []);
 });
 
-test('参参一覧は同じ提出者・参加企画・企画名の複数回答だけを重複にする', () => {
+test('同じメアドと参参名の再送も最新だけに畳まず全回答を保持する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名', '画像リンク'],
+    [
+      ['2026-08-30T01:00:00+09:00', 'retry@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/old'],
+      ['2026-08-30T02:00:00+09:00', 'retry@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/new']
+    ]
+  );
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+
+  assert.equal(delta.appends.length, 2);
+  assert.equal(delta.summary.needsReview, 2);
+  assert.equal(delta.appends.every(
+    (row) => row[headers.indexOf('照合結果')] === '同一メアド・参参名重複'
+  ), true);
+});
+
+test('除外台帳の回答は再生成せず、残った回答の警告を解除する', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
   const batch = makeBatch(
     ['メールアドレス', '参加企画', '団体名', '企画名'],
     [
-      ['duplicate@example.com', '教室企画', '重複団体A', '同一企画'],
-      ['duplicate@example.com', '教室企画', '重複団体B', '同一企画']
+      ['exclude@example.com', '教室企画', '同一団体', '正しい企画'],
+      ['exclude@example.com', '教室企画', '同一団体', '誤回答企画']
     ]
   );
+  const responsePlan = context.participantResponsePlan_([batch], {});
+  const excluded = { [responsePlan.records[1].responseId]: true };
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME', excluded));
 
-  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
-  const duplicate = delta.appends[0];
-
-  assert.equal(duplicate[headers.indexOf('提出状況')], '確認中');
-  assert.equal(duplicate[headers.indexOf('参参名・フォーム回答')], '');
-  assert.equal(duplicate[headers.indexOf('企画名・フォーム回答')], '');
-  assert.equal(duplicate[headers.indexOf('照合結果')], 'フォーム回答重複');
-  assert.equal(delta.summary.needsReview, 1);
-  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
-});
-
-test('参参一覧は同一企画の再送から一意に新しい回答を採用する', () => {
-  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
-  const placeholder = new Array(headers.length).fill('');
-  placeholder[headers.indexOf('参加企画')] = '教室企画';
-  placeholder[headers.indexOf('提出状況')] = '確認中';
-  placeholder[headers.indexOf('メールアドレス')] = 'image-update@example.com';
-  placeholder[headers.indexOf('照合結果')] = 'フォーム回答重複';
-  const batch = makeBatch(
-    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名', '画像リンク'],
-    [
-      ['2026-08-30T01:00:00+09:00', 'image-update@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/old'],
-      ['2026-08-30T02:00:00+09:00', 'image-update@example.com', '教室企画', '更新団体', '同一企画', 'https://example.com/new']
-    ]
-  );
-
-  const delta = plain(context.planParticipantTrackerDelta_(
-    [headers, placeholder],
-    [batch],
-    'TIME'
-  ));
-  const updated = delta.updates[0].row;
-
-  assert.equal(delta.summary.created, 0);
-  assert.equal(delta.summary.updated, 1);
-  assert.equal(delta.summary.needsReview, 0);
-  assert.equal(delta.summary.errors, 0);
-  assert.equal(updated[headers.indexOf('提出状況')], '提出済み');
-  assert.equal(updated[headers.indexOf('照合結果')], '一致');
-  assert.equal(updated[headers.indexOf('参参名・確定版')], '更新団体');
-  assert.equal(updated[headers.indexOf('企画名・確定版')], '同一企画');
-  assert.equal(delta.issues[0].code, 'I_RESUBMISSION_LATEST_SELECTED');
-  assert.equal(delta.issues[0].level, 'INFO');
-});
-
-test('参参一覧は旧回答の日時がヘッダー文字列でも正常日時の再送を採用する', () => {
-  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
-  const placeholder = new Array(headers.length).fill('');
-  placeholder[headers.indexOf('参加企画')] = 'ストリート短時間企画';
-  placeholder[headers.indexOf('提出状況')] = '確認中';
-  placeholder[headers.indexOf('メールアドレス')] = 'header-time@example.com';
-  placeholder[headers.indexOf('照合結果')] = 'フォーム回答重複';
-  const batch = makeBatch(
-    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名', '画像リンク'],
-    [
-      ['タイムスタンプ', 'header-time@example.com', 'ストリート短時間企画', '旧団体名', '同一　企画', ''],
-      ['2026-08-31T15:26:12+09:00', 'header-time@example.com', 'ストリート短時間企画', '更新団体名', '同一 企画', 'https://example.com/new']
-    ]
-  );
-
-  const delta = plain(context.planParticipantTrackerDelta_(
-    [headers, placeholder],
-    [batch],
-    'TIME'
-  ));
-  const updated = delta.updates[0].row;
-
-  assert.equal(delta.summary.needsReview, 0);
-  assert.equal(delta.summary.errors, 0);
-  assert.equal(updated[headers.indexOf('提出状況')], '提出済み');
-  assert.equal(updated[headers.indexOf('参参名・確定版')], '更新団体名');
-  assert.equal(updated[headers.indexOf('企画名・確定版')], '同一 企画');
-  assert.equal(updated[headers.indexOf('照合結果')], '一致');
-  assert.equal(delta.issues[0].code, 'I_RESUBMISSION_HEADER_TIMESTAMP_SELECTED');
-});
-
-test('参参一覧は任意の不正日時を含む重複回答を自動採用しない', () => {
-  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
-  const batch = makeBatch(
-    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名'],
-    [
-      ['壊れた日時', 'invalid-time@example.com', '教室企画', '旧団体名', '同一企画'],
-      ['2026-08-31T16:00:00+09:00', 'invalid-time@example.com', '教室企画', '更新団体名', '同一企画']
-    ]
-  );
-
-  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
-
-  assert.equal(delta.summary.needsReview, 1);
-  assert.equal(delta.appends[0][headers.indexOf('提出状況')], '確認中');
-  assert.equal(delta.appends[0][headers.indexOf('照合結果')], 'フォーム回答重複');
-  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
-});
-
-test('参参一覧は最新回答が同時刻なら自動採用しない', () => {
-  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
-  const batch = makeBatch(
-    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名'],
-    [
-      ['2026-08-31T16:00:00+09:00', 'same-time@example.com', '教室企画', '団体A', '同一企画'],
-      ['2026-08-31T16:00:00+09:00', 'same-time@example.com', '教室企画', '団体B', '同一企画']
-    ]
-  );
-
-  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
-
-  assert.equal(delta.summary.needsReview, 1);
-  assert.equal(delta.appends[0][headers.indexOf('提出状況')], '確認中');
-  assert.equal(delta.appends[0][headers.indexOf('照合結果')], 'フォーム回答重複');
-  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
-});
-
-test('旧フォーム回答重複行は1企画目へ再利用し、別企画を追加する', () => {
-  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
-  const placeholder = new Array(headers.length).fill('');
-  placeholder[headers.indexOf('参加企画')] = '飲食物販売企画';
-  placeholder[headers.indexOf('提出状況')] = '確認中';
-  placeholder[headers.indexOf('メールアドレス')] = 'legacy-multiple@example.com';
-  placeholder[headers.indexOf('照合結果')] = 'フォーム回答重複';
-  placeholder[headers.indexOf('最終同期日時')] = 'OLD-TIME';
-  const batch = makeBatch(
-    ['メールアドレス', '参加企画', '団体名', '企画名'],
-    [
-      ['legacy-multiple@example.com', '飲食物販売企画', '同一団体', '飲食企画A'],
-      ['legacy-multiple@example.com', '飲食物販売企画', '同一団体', '飲食企画B']
-    ]
-  );
-
-  const delta = plain(context.planParticipantTrackerDelta_(
-    [headers, placeholder],
-    [batch],
-    'TIME'
-  ));
-  const projects = [delta.updates[0].row, delta.appends[0]].map(
-    (row) => row[headers.indexOf('企画名・確定版')]
-  ).sort();
-
-  assert.equal(delta.summary.created, 1);
-  assert.equal(delta.summary.updated, 1);
-  assert.equal(delta.summary.needsReview, 0);
-  assert.deepEqual(projects, ['飲食企画A', '飲食企画B']);
-  assert.equal(delta.updates[0].row[headers.indexOf('提出状況')], '提出済み');
+  assert.equal(delta.appends.length, 1);
+  assert.equal(delta.appends[0][headers.indexOf('企画名・確定版')], '正しい企画');
   assert.equal(delta.appends[0][headers.indexOf('提出状況')], '提出済み');
-  assert.deepEqual(delta.issues, []);
+  assert.equal(delta.appends[0][headers.indexOf('照合結果')], '一致');
+  assert.equal(delta.summary.needsReview, 0);
+});
+
+test('除外済みの既存行を削除し、残った確認中行を提出済みに戻す', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['resolve@example.com', '教室企画', '同一団体', '正しい企画'],
+      ['resolve@example.com', '教室企画', '同一団体', '誤回答企画']
+    ]
+  );
+  const initial = plain(context.planParticipantTrackerDelta_([headers], [batch], 'OLD'));
+  const correct = initial.appends[0];
+  const wrong = initial.appends[1];
+  const excludedId = wrong[headers.indexOf('回答識別子')];
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, correct, wrong],
+    [batch],
+    'NEW',
+    { [excludedId]: true }
+  ));
+
+  assert.deepEqual(delta.deletes, [3]);
+  assert.equal(delta.updates.length, 1);
+  assert.equal(delta.updates[0].row[headers.indexOf('提出状況')], '提出済み');
+  assert.equal(delta.updates[0].row[headers.indexOf('照合結果')], '一致');
+  assert.equal(delta.summary.needsReview, 0);
+});
+
+test('選択行の回答識別子は空欄を除外して重複なく取得する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const first = new Array(headers.length).fill('');
+  const second = new Array(headers.length).fill('');
+  const blank = new Array(headers.length).fill('');
+  first[headers.indexOf('回答識別子')] = 'PR-FIRST';
+  second[headers.indexOf('回答識別子')] = 'PR-FIRST';
+  first[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
+  second[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
+
+  assert.deepEqual(
+    plain(context.participantResponseIdsFromSelection_(headers, [first, second, blank])),
+    ['PR-FIRST']
+  );
+});
+
+test('重複警告でない行は専用除外操作の対象にしない', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const unique = new Array(headers.length).fill('');
+  unique[headers.indexOf('回答識別子')] = 'PR-UNIQUE';
+  unique[headers.indexOf('照合結果')] = '一致';
+
+  assert.deepEqual(
+    plain(context.participantResponseIdsFromSelection_(headers, [unique])),
+    []
+  );
+});
+
+test('同じ重複グループの全回答を一度に除外しない', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const makeDuplicateRow = (id, projectName) => {
+    const row = new Array(headers.length).fill('');
+    row[headers.indexOf('メールアドレス')] = 'guard@example.com';
+    row[headers.indexOf('参参名・フォーム回答')] = 'ガード団体';
+    row[headers.indexOf('企画名・フォーム回答')] = projectName;
+    row[headers.indexOf('照合結果')] = '同一メアド・参参名重複';
+    row[headers.indexOf('回答識別子')] = id;
+    return row;
+  };
+  const rows = [
+    makeDuplicateRow('PR-CORRECT', '正しい企画'),
+    makeDuplicateRow('PR-WRONG', '誤回答企画')
+  ];
+
+  assert.equal(
+    context.participantFullySelectedDuplicateGroupCount_(
+      headers,
+      rows,
+      ['PR-WRONG']
+    ),
+    0
+  );
+  assert.equal(
+    context.participantFullySelectedDuplicateGroupCount_(
+      headers,
+      rows,
+      ['PR-CORRECT', 'PR-WRONG']
+    ),
+    1
+  );
 });
 
 test('旧参参一覧はマスターからメールを補って提出管理形式へ移行する', () => {
@@ -697,6 +700,39 @@ test('申込時列を持つ参参一覧は列を削除し、誤った要確認�
   assert.equal(migrated[0][headers.indexOf('照合結果')], '一致');
   assert.equal(migrated[1][headers.indexOf('提出状況')], 'キャンセル');
   assert.equal(migrated[1][headers.indexOf('照合結果')], '一致');
+});
+
+test('回答識別子追加前の参参一覧は既存列を保持して識別子を空欄で追加する', () => {
+  const oldHeaders = plain(
+    context.APP_CONFIG.previousParticipantTrackerHeadersWithoutResponseId
+  );
+  const oldValues = {
+    参加企画: '教室企画',
+    提出状況: 'キャンセル',
+    メールアドレス: 'current-migration@example.com',
+    '参参名・フォーム回答': '既存参参名',
+    '参参名・確定版': '既存参参名',
+    '企画名・フォーム回答': '既存企画名',
+    '企画名・確定版': '既存企画名',
+    照合結果: '一致',
+    最終同期日時: 'OLD-TIME'
+  };
+  const oldRow = oldHeaders.map((header) => oldValues[header] || '');
+  const migrated = plain(context.migrateParticipantRowsByHeader_([
+    oldHeaders,
+    oldRow
+  ]));
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+
+  assert.equal(migrated.length, 1);
+  oldHeaders.forEach((header) => {
+    assert.equal(
+      migrated[0][headers.indexOf(header)],
+      oldValues[header],
+      header
+    );
+  });
+  assert.equal(migrated[0][headers.indexOf('回答識別子')], '');
 });
 
 test('変更申請2タブは自由記述をマスターへ自動反映しない', () => {

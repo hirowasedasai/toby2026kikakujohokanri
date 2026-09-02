@@ -34,6 +34,7 @@ var APP_CONFIG = Object.freeze({
     ]),
     master: '26掲載情報マスター',
     participantOutput: '参参一覧',
+    participantExclusions: '26参参除外管理',
     foodOutput: '屋台情報まとめ',
     bureauOutputs: Object.freeze([
       Object.freeze({ bureau: '会場整備局', name: '26会場整備局' }),
@@ -79,6 +80,18 @@ var APP_CONFIG = Object.freeze({
     '企画名・フォーム回答',
     '企画名・確定版',
     '照合結果',
+    '最終同期日時',
+    '回答識別子'
+  ]),
+  previousParticipantTrackerHeadersWithoutResponseId: Object.freeze([
+    '参加企画',
+    '提出状況',
+    'メールアドレス',
+    '参参名・フォーム回答',
+    '参参名・確定版',
+    '企画名・フォーム回答',
+    '企画名・確定版',
+    '照合結果',
     '最終同期日時'
   ]),
   previousParticipantTrackerHeaders: Object.freeze([
@@ -93,6 +106,13 @@ var APP_CONFIG = Object.freeze({
     '照合結果',
     '最終同期日時'
   ]),
+  participantExclusionHeaders: Object.freeze([
+    '回答識別子',
+    '除外日時',
+    '除外理由'
+  ]),
+  participantDuplicateResult: '同一メアド・参参名重複',
+  participantDuplicateWarningBackground: '#fff2cc',
   previousParticipantOutputHeaders: Object.freeze([
     '管理ID',
     '参加企画',
@@ -109,7 +129,8 @@ var APP_CONFIG = Object.freeze({
     '企画名・フォーム回答',
     '企画名・確定版',
     '照合結果',
-    '最終同期日時'
+    '最終同期日時',
+    '回答識別子'
   ]),
   participantStatusOptions: Object.freeze([
     '提出済み',

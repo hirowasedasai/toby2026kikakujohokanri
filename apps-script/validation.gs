@@ -235,6 +235,11 @@ function preflightInternal_(options) {
       APP_CONFIG.participantOutputHeaders,
       'E_OUTPUT_HEADER_MISSING'
     );
+    result.participantExclusions = validateExactHeaders_(
+      requireSheet_(spreadsheet, APP_CONFIG.sheets.participantExclusions),
+      APP_CONFIG.participantExclusionHeaders,
+      'E_PARTICIPANT_EXCLUSION_HEADER_MISSING'
+    );
     result.foodOutput = validateExactHeaders_(
       requireSheet_(spreadsheet, APP_CONFIG.sheets.foodOutput),
       APP_CONFIG.foodOutputHeaders,
