@@ -149,20 +149,26 @@ function participantResponseGroups_(inputBatches) {
   });
   var autoResolvedKeys = {};
   Object.keys(groups).forEach(function (key) {
-    var resolution = resolveImageOnlyResubmission_(groups[key]);
+    var resolution = resolveLatestResubmission_(groups[key]);
     if (!resolution.resolved) return;
     collected.skipped += groups[key].length - 1;
     groups[key] = [resolution.record];
     autoResolvedKeys[key] = true;
+    var hasHeaderTimestampPlaceholder =
+      resolution.reason === 'header-timestamp-placeholder';
     collected.issues.push(
       makeIssue_(
         'INFO',
-        'I_IMAGE_RESUBMISSION_LATEST_SELECTED',
-        '同一企画の画像リンクのみ異なる再送のため、回答日時が新しい回答を採用しました。',
+        hasHeaderTimestampPlaceholder
+          ? 'I_RESUBMISSION_HEADER_TIMESTAMP_SELECTED'
+          : 'I_RESUBMISSION_LATEST_SELECTED',
+        hasHeaderTimestampPlaceholder
+          ? '同一企画の旧回答に回答日時ヘッダー文字列が含まれるため、正常な回答日時を持つ回答を採用しました。'
+          : '同一企画の再送として、回答日時が一意に新しい回答を採用しました。',
         {
           sourceSheet: resolution.record.sourceSheet,
           rowNumber: resolution.record.rowNumber,
-          columnName: '画像リンク,タイムスタンプ'
+          columnName: 'タイムスタンプ'
         }
       )
     );

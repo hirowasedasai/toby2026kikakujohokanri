@@ -496,7 +496,7 @@ test('参参一覧は同じ提出者・参加企画・企画名の複数回答�
   assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
 });
 
-test('参参一覧は画像リンクだけを更新した再送の最新回答を採用する', () => {
+test('参参一覧は同一企画の再送から一意に新しい回答を採用する', () => {
   const headers = plain(context.APP_CONFIG.participantOutputHeaders);
   const placeholder = new Array(headers.length).fill('');
   placeholder[headers.indexOf('参加企画')] = '教室企画';
@@ -507,7 +507,7 @@ test('参参一覧は画像リンクだけを更新した再送の最新回答�
     ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名', '画像リンク'],
     [
       ['2026-08-30T01:00:00+09:00', 'image-update@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/old'],
-      ['2026-08-30T02:00:00+09:00', 'image-update@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/new']
+      ['2026-08-30T02:00:00+09:00', 'image-update@example.com', '教室企画', '更新団体', '同一企画', 'https://example.com/new']
     ]
   );
 
@@ -524,9 +524,77 @@ test('参参一覧は画像リンクだけを更新した再送の最新回答�
   assert.equal(delta.summary.errors, 0);
   assert.equal(updated[headers.indexOf('提出状況')], '提出済み');
   assert.equal(updated[headers.indexOf('照合結果')], '一致');
+  assert.equal(updated[headers.indexOf('参参名・確定版')], '更新団体');
   assert.equal(updated[headers.indexOf('企画名・確定版')], '同一企画');
-  assert.equal(delta.issues[0].code, 'I_IMAGE_RESUBMISSION_LATEST_SELECTED');
+  assert.equal(delta.issues[0].code, 'I_RESUBMISSION_LATEST_SELECTED');
   assert.equal(delta.issues[0].level, 'INFO');
+});
+
+test('参参一覧は旧回答の日時がヘッダー文字列でも正常日時の再送を採用する', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const placeholder = new Array(headers.length).fill('');
+  placeholder[headers.indexOf('参加企画')] = 'ストリート短時間企画';
+  placeholder[headers.indexOf('提出状況')] = '確認中';
+  placeholder[headers.indexOf('メールアドレス')] = 'header-time@example.com';
+  placeholder[headers.indexOf('照合結果')] = 'フォーム回答重複';
+  const batch = makeBatch(
+    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名', '画像リンク'],
+    [
+      ['タイムスタンプ', 'header-time@example.com', 'ストリート短時間企画', '旧団体名', '同一　企画', ''],
+      ['2026-08-31T15:26:12+09:00', 'header-time@example.com', 'ストリート短時間企画', '更新団体名', '同一 企画', 'https://example.com/new']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_(
+    [headers, placeholder],
+    [batch],
+    'TIME'
+  ));
+  const updated = delta.updates[0].row;
+
+  assert.equal(delta.summary.needsReview, 0);
+  assert.equal(delta.summary.errors, 0);
+  assert.equal(updated[headers.indexOf('提出状況')], '提出済み');
+  assert.equal(updated[headers.indexOf('参参名・確定版')], '更新団体名');
+  assert.equal(updated[headers.indexOf('企画名・確定版')], '同一 企画');
+  assert.equal(updated[headers.indexOf('照合結果')], '一致');
+  assert.equal(delta.issues[0].code, 'I_RESUBMISSION_HEADER_TIMESTAMP_SELECTED');
+});
+
+test('参参一覧は任意の不正日時を含む重複回答を自動採用しない', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['壊れた日時', 'invalid-time@example.com', '教室企画', '旧団体名', '同一企画'],
+      ['2026-08-31T16:00:00+09:00', 'invalid-time@example.com', '教室企画', '更新団体名', '同一企画']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+
+  assert.equal(delta.summary.needsReview, 1);
+  assert.equal(delta.appends[0][headers.indexOf('提出状況')], '確認中');
+  assert.equal(delta.appends[0][headers.indexOf('照合結果')], 'フォーム回答重複');
+  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
+});
+
+test('参参一覧は最新回答が同時刻なら自動採用しない', () => {
+  const headers = plain(context.APP_CONFIG.participantOutputHeaders);
+  const batch = makeBatch(
+    ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名'],
+    [
+      ['2026-08-31T16:00:00+09:00', 'same-time@example.com', '教室企画', '団体A', '同一企画'],
+      ['2026-08-31T16:00:00+09:00', 'same-time@example.com', '教室企画', '団体B', '同一企画']
+    ]
+  );
+
+  const delta = plain(context.planParticipantTrackerDelta_([headers], [batch], 'TIME'));
+
+  assert.equal(delta.summary.needsReview, 1);
+  assert.equal(delta.appends[0][headers.indexOf('提出状況')], '確認中');
+  assert.equal(delta.appends[0][headers.indexOf('照合結果')], 'フォーム回答重複');
+  assert.equal(delta.issues[0].code, 'E_PARTICIPANT_FORM_DUPLICATE');
 });
 
 test('旧フォーム回答重複行は1企画目へ再利用し、別企画を追加する', () => {
@@ -1210,7 +1278,7 @@ test('暫定キー衝突は統合せず要確認にし、再実行でも重複�
   assert.equal(second.summary.created, 0);
 });
 
-test('画像リンクだけを更新した再送は最新回答を採用して旧衝突を解除する', () => {
+test('一意に新しい再送は最新回答を採用して旧衝突を解除する', () => {
   const existing = masterHeaders.map((header) => ({
     管理ID: 'TMP-IMAGEUPDATE01',
     メールアドレス: 'image-master@example.com',
@@ -1228,7 +1296,7 @@ test('画像リンクだけを更新した再送は最新回答を採用して�
     ['タイムスタンプ', 'メールアドレス', '参加企画', '団体名', '企画名', '画像リンク'],
     [
       ['2026-08-30T01:00:00+09:00', 'image-master@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/old'],
-      ['2026-08-30T02:00:00+09:00', 'image-master@example.com', '教室企画', '同一団体', '同一企画', 'https://example.com/new']
+      ['2026-08-30T02:00:00+09:00', 'image-master@example.com', '教室企画', '更新団体', '同一企画', 'https://example.com/new']
     ]
   );
   const result = plain(context.planMasterUpsert_(masterHeaders, [existing], [batch], 'TIME'));
@@ -1238,11 +1306,12 @@ test('画像リンクだけを更新した再送は最新回答を採用して�
   assert.equal(result.summary.updated, 1);
   assert.equal(result.summary.needsReview, 0);
   assert.equal(result.summary.errors, 0);
+  assert.equal(masterValue(result.rows[0], '団体名'), '更新団体');
   assert.equal(masterValue(result.rows[0], '画像リンク'), 'https://example.com/new');
   assert.equal(masterValue(result.rows[0], '同期ステータス'), '同期済み');
   assert.equal(masterValue(result.rows[0], '要確認'), 'FALSE');
   assert.equal(masterValue(result.rows[0], '要確認理由'), '');
-  assert.equal(result.issues[0].code, 'I_IMAGE_RESUBMISSION_LATEST_SELECTED');
+  assert.equal(result.issues[0].code, 'I_RESUBMISSION_LATEST_SELECTED');
   assert.equal(result.issues[0].level, 'INFO');
 });
 
