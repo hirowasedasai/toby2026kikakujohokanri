@@ -16,6 +16,8 @@ const requiredFiles = [
   'apps-script/triggers.gs',
   'apps-script/syncMaster.gs',
   'apps-script/buildOutputs.gs',
+  'apps-script/buildBureauOutputs.gs',
+  'apps-script/bureauResponseSelection.gs',
   'apps-script/validation.gs',
   'apps-script/logger.gs',
   'apps-script/utils.gs',

@@ -16,6 +16,7 @@ function onOpen() {
     .addItem('自動同期を無効化', 'uninstallTriggers')
     .addSeparator()
     .addItem('要手動確認を開く', 'openManualReview')
+    .addItem('その他掲載情報: 選択した回答を採用', 'adoptSelectedOtherPublicationResponse')
     .addItem('処理ログを開く', 'openProcessLog')
     .addItem('環境情報を表示', 'showEnvironmentInfo')
     .addToUi();

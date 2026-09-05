@@ -359,7 +359,7 @@ function evaluateStaffChange_(change, projectIndex) {
   return { applied: true, code: '', reason: '', target: target };
 }
 
-function buildBureauOutputPlan_(inputBatches, headersByBureau) {
+function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseIds) {
   var rowsByBureau = {};
   APP_CONFIG.sheets.bureauOutputs.forEach(function (output) {
     rowsByBureau[output.bureau] = [];
@@ -376,6 +376,11 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau) {
     batch.values.slice(1).forEach(function (row, offset) {
       if (isBlankRow_(row)) return;
       var record = bureauRecordFromInputRow_(row, offset + 2, batch, headerPositions);
+      if (isOtherPublicationRecord_(record) && excludedResponseIds &&
+        excludedResponseIds[record.sourceSheet + ':' + record.rowNumber]) {
+        skipped += 1;
+        return;
+      }
       if (batch.source.type === 'STAFF_CHANGE') {
         changeRecords.push(record);
         return;
@@ -1132,7 +1137,8 @@ function performBuildBureauOutputs_(suppliedPreflight, executionId) {
   bureauOutputs.forEach(function (output) {
     headersByBureau[output.bureau] = output.values[0];
   });
-  var plan = buildBureauOutputPlan_(preflight.inputs, headersByBureau);
+  var plan = buildBureauOutputPlan_(preflight.inputs, headersByBureau,
+    bureauResponseExclusionSet_(preflight.spreadsheet));
   var delta = planBureauDelta_(bureauOutputs, plan.records);
   applyBureauDelta_(delta);
   var allReviews = plan.reviews.concat(delta.reviews);

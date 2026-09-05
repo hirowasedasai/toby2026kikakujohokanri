@@ -39,6 +39,7 @@ for (const file of [
   'syncMaster.gs',
   'buildOutputs.gs',
   'buildBureauOutputs.gs',
+  'bureauResponseSelection.gs',
   'setup.gs'
 ]) {
   const source = await readFile(path.join(repoRoot, 'apps-script', file), 'utf8');
@@ -1025,6 +1026,148 @@ test('その他掲載情報フォームを局別専用入力として解決す�
   assert.equal(initialRow[outputHeaders.indexOf('企画場所')], '');
   assert.equal(initialRow[outputHeaders.indexOf('当媒チェック')], '未確認');
   assert.equal(initialRow[outputHeaders.indexOf('校閲チェック')], '未確認');
+});
+
+function makeOtherAdoptionScenario() {
+  const source = context.APP_CONFIG.sheets.inputs.find(input => input.type === 'STAFF_OTHER_PUBLICATION');
+  const inputs = [{ source, values: [
+    ['企画名（26字以内）', '部署名（チーム、PJなど）', '所属局', '担当者名'],
+    ['合成掲載企画', '旧チーム', '総務局', '合成担当'],
+    ['合成掲載企画', '新チーム', '広報制作局', '合成担当']
+  ] }];
+  const key = `${source.name}:3`;
+  const adoption = context.otherPublicationAdoptionPlan_(inputs, key, {});
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const sheets = {};
+  function addSheet(name, rows) {
+    const sheet = makeGridSheet(rows);
+    sheet.getName = () => name;
+    sheet.hideSheet = () => { sheet.hidden = true; };
+    sheet.deleteRow = number => sheet.grid.splice(number - 1, 1);
+    const getRange = sheet.getRange.bind(sheet);
+    sheet.getRange = (...args) => {
+      const range = getRange(...args);
+      range.setValue = value => range.setValues([[value]]);
+      for (const method of ['clearDataValidations', 'setBackground', 'setFontColor', 'setFontWeight']) {
+        range[method] = () => range;
+      }
+      // These fixtures have one data row per section, so no sorting is needed.
+      return range;
+    };
+    sheets[name] = sheet;
+    return sheet;
+  }
+  const original = context.buildBureauOutputPlan_(inputs).records[0];
+  const originalRow = plain(context.mergeBureauRecordWithManualRow_(original, null, null, headers));
+  originalRow[headers.indexOf('掲載文字情報')] = '編集済みの掲載文';
+  originalRow[headers.indexOf('ページ名')] = '合成ページ';
+  originalRow[headers.indexOf('当媒チェック')] = '確認済み';
+  const oldSheet = addSheet('26総務局', [headers,
+    plain(context.bureauOtherPublicationSeparatorRow_(headers)), originalRow]);
+  const newHeaders = headers.slice().reverse();
+  const newSheet = addSheet('26広報制作局', [newHeaders]);
+  const reviewHeaders = plain(context.APP_CONFIG.manualReviewHeaders).reverse();
+  const reviewRows = adoption.group.map(record => reviewHeaders.map(header =>
+    context.manualReviewValueByHeader_(context.manualReviewFromRecord_(record, '重複'), header, {})));
+  const reviewSheet = addSheet(context.APP_CONFIG.sheets.manualReview, [reviewHeaders, ...reviewRows]);
+  const logSheet = addSheet(context.APP_CONFIG.sheets.log, [plain(context.APP_CONFIG.logHeaders)]);
+  const spreadsheet = {
+    getSheetByName: name => sheets[name] || null,
+    insertSheet: name => addSheet(name, [])
+  };
+  const preflight = {
+    spreadsheet, inputs,
+    settings: { environment: 'staging', releaseId: 'synthetic' },
+    bureauOutputs: [
+      { bureau: '総務局', sheet: oldSheet, values: oldSheet.grid.map(row => row.slice()) },
+      { bureau: '広報制作局', sheet: newSheet, values: newSheet.grid.map(row => row.slice()) }
+    ],
+    manualReview: { sheet: reviewSheet, values: reviewSheet.grid },
+    log: { sheet: logSheet, values: logSheet.grid }
+  };
+  return { inputs, key, adoption, preflight, sheets, oldSheet, newSheet, reviewSheet, logSheet };
+}
+
+test('その他掲載情報の選択採用は原本を保持し局移動・手動列保持・確認完了まで実行する', () => {
+  const scenario = makeOtherAdoptionScenario();
+  const before = JSON.stringify(scenario.inputs);
+  const result = context.applyOtherPublicationAdoption_(scenario.preflight, scenario.adoption, 'synthetic');
+  assert.equal(result.excluded, 1);
+  assert.equal(result.updated, 1);
+  assert.equal(result.needsReview, 0);
+  assert.equal(scenario.oldSheet.grid.length, 2);
+  const [headers, , row] = scenario.newSheet.grid;
+  assert.equal(row[headers.indexOf('部署名')], '新チーム');
+  assert.equal(row[headers.indexOf('掲載文字情報')], '編集済みの掲載文');
+  assert.equal(row[headers.indexOf('ページ名')], '合成ページ');
+  assert.equal(row[headers.indexOf('当媒チェック')], '確認済み');
+  assert.equal(JSON.stringify(scenario.inputs), before);
+  const ledger = scenario.sheets[context.APP_CONFIG.sheets.bureauExclusions];
+  assert.equal(ledger.hidden, true);
+  assert.equal(ledger.grid.length, 2);
+  assert.ok(!JSON.stringify(ledger.grid).includes('合成担当'));
+  assert.ok(!JSON.stringify(scenario.logSheet.grid).includes('合成担当'));
+  const next = context.buildBureauOutputPlan_(scenario.inputs, null,
+    context.bureauResponseExclusionSet_(scenario.preflight.spreadsheet));
+  assert.equal(next.records.length, 1);
+  assert.equal(next.records[0].rowNumber, 3);
+  const current = scenario.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid }));
+  const delta = context.planBureauDelta_(current, next.records);
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+  assert.equal(delta.reviews.length, 0);
+});
+
+test('その他掲載情報の採用は既存局別行が重複すると除外登録前に停止する', () => {
+  const scenario = makeOtherAdoptionScenario();
+  const existing = scenario.preflight.bureauOutputs[0];
+  existing.values.push(existing.values[2].slice());
+  assert.throws(() => context.applyOtherPublicationAdoption_(scenario.preflight, scenario.adoption, 'synthetic'),
+    error => error.code === 'E_BUREAU_ADOPTION_OUTPUT_AMBIGUOUS');
+  assert.equal(scenario.sheets[context.APP_CONFIG.sheets.bureauExclusions], undefined);
+  assert.equal(context.pendingManualReviewCountFromValues_(scenario.reviewSheet.grid), 2);
+});
+
+test('採用中の書き込み失敗では除外登録を保持し確認行を未対応に残す', () => {
+  const scenario = makeOtherAdoptionScenario();
+  const originalGetRange = scenario.newSheet.getRange;
+  scenario.newSheet.getRange = (...args) => {
+    const range = originalGetRange(...args);
+    range.setValues = () => { throw new Error('synthetic write failure'); };
+    return range;
+  };
+  assert.throws(() => context.applyOtherPublicationAdoption_(scenario.preflight, scenario.adoption, 'synthetic'),
+    /synthetic write failure/);
+  assert.equal(context.pendingManualReviewCountFromValues_(scenario.reviewSheet.grid), 2);
+  assert.equal(scenario.oldSheet.grid.length, 3);
+  assert.equal(scenario.sheets[context.APP_CONFIG.sheets.bureauExclusions].grid.length, 2);
+  scenario.newSheet.getRange = originalGetRange;
+  const retry = context.otherPublicationAdoptionPlan_(scenario.inputs, scenario.key,
+    context.bureauResponseExclusionSet_(scenario.preflight.spreadsheet));
+  const result = context.applyOtherPublicationAdoption_(scenario.preflight, retry, 'retry');
+  assert.equal(result.excluded, 0);
+  assert.equal(result.needsReview, 0);
+});
+
+test('その他掲載情報の採用は対象外・除外済み・原本不一致を拒否する', () => {
+  const { inputs, key, adoption } = makeOtherAdoptionScenario();
+  assert.throws(() => context.otherPublicationAdoptionPlan_(inputs, 'unrelated:2', {}),
+    error => error.code === 'E_BUREAU_ADOPTION_SOURCE_INVALID');
+  assert.throws(() => context.otherPublicationAdoptionPlan_(inputs, key, { [key]: true }),
+    error => error.code === 'E_BUREAU_ADOPTION_SOURCE_INVALID');
+  assert.throws(() => context.otherPublicationAdoptionPlan_([{ ...inputs[0], values: inputs[0].values.slice(0, 2) }],
+    `${inputs[0].source.name}:2`, {}), error => error.code === 'E_BUREAU_ADOPTION_NOT_DUPLICATE');
+  assert.throws(() => context.validateAdoptionReview_({ projectName: '別の合成企画' }, adoption.selected),
+    error => error.code === 'E_BUREAU_ADOPTION_SELECTION_STALE');
+});
+
+test('局別回答除外はその他掲載情報だけに適用し通常企画には適用しない', () => {
+  const { inputs } = makeOtherAdoptionScenario();
+  const normalSource = context.APP_CONFIG.sheets.inputs.find(input => input.type === 'STAFF_FORM');
+  const normal = { ...inputs[0], source: normalSource };
+  const ids = { [`${normalSource.name}:2`]: true, [`${inputs[0].source.name}:2`]: true };
+  const plan = context.buildBureauOutputPlan_([...inputs, normal], null, ids);
+  assert.equal(plan.records.filter(record => record.sourceType === 'STAFF_FORM').length, 2);
+  assert.equal(plan.records.filter(context.isOtherPublicationRecord_).length, 1);
 });
 
 test('その他掲載情報の不足セルへ手動補完した値を次回同期でも保持する', () => {

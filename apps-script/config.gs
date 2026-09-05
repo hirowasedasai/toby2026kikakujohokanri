@@ -35,6 +35,7 @@ var APP_CONFIG = Object.freeze({
     master: '26掲載情報マスター',
     participantOutput: '参参一覧',
     participantExclusions: '26参参除外管理',
+    bureauExclusions: '26局別回答除外管理',
     foodOutput: '屋台情報まとめ',
     bureauOutputs: Object.freeze([
       Object.freeze({ bureau: '会場整備局', name: '26会場整備局' }),

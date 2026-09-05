@@ -35,4 +35,6 @@
 
 ## 復旧
 
+その他掲載情報の採用操作で`E_BUREAU_ADOPTION_*`が出た場合、回答原本は修正しない。`SOURCE_INVALID`・`NOT_DUPLICATE`・`SELECTION_INVALID`・`SELECTION_STALE`は対象と選択を確認する。`OUTPUT_AMBIGUOUS`は既存局別行が複数あるため、手動入力を確認してから権限者が解消する。`INCOMPLETE`や書き込みエラーでは`26局別回答除外管理`への登録だけが完了している可能性がある。移動元・移動先と台帳を確認し、同じ正しい回答を再採用する。結果が確定するまで要手動確認の行を対応済みにしない。`E_BUREAU_EXCLUSION_HEADER_MISSING`では台帳のヘッダーを確認し、除外情報を消さずに復旧する。
+
 コード起因はロールバック手順、データ・スキーマ起因はstagingで合成再現して修正する。`npm run verify`、staging dry run、レビュー、明示承認を経てproductionへ反映する。復旧後に必要なtriggerだけを再作成し、事後記録にはPIIを含めない。
