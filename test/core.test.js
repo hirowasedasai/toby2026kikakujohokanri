@@ -123,6 +123,9 @@ function makeGridSheet(initialValues) {
     getLastColumn() {
       return grid.reduce((width, row) => Math.max(width, row.length), 0);
     },
+    insertRowsBefore(row, count) {
+      grid.splice(row - 1, 0, ...Array.from({ length: count }, () => []));
+    },
     getRange(row, column, rowCount = 1, columnCount = 1) {
       return {
         getValues() {
@@ -140,7 +143,24 @@ function makeGridSheet(initialValues) {
               grid[targetRowIndex][column - 1 + columnOffset] = value;
             });
           });
-        }
+          return this;
+        },
+        sort(spec) {
+          const rows = grid.slice(row - 1, row - 1 + rowCount);
+          rows.sort((a, b) => {
+            for (const { column: sortColumn, ascending } of spec) {
+              const order = String(a[sortColumn - 1]).localeCompare(String(b[sortColumn - 1]), 'ja');
+              if (order) return ascending ? order : -order;
+            }
+            return 0;
+          });
+          grid.splice(row - 1, rowCount, ...rows);
+          return this;
+        },
+        clearDataValidations() { return this; },
+        setBackground() { return this; },
+        setFontColor() { return this; },
+        setFontWeight() { return this; }
       };
     },
     setTabColor(value) {
@@ -1095,8 +1115,8 @@ test('その他掲載情報の選択採用は原本を保持し局移動・手�
   assert.equal(result.excluded, 1);
   assert.equal(result.updated, 1);
   assert.equal(result.needsReview, 0);
-  assert.equal(scenario.oldSheet.grid.length, 2);
-  const [headers, , row] = scenario.newSheet.grid;
+  assert.equal(scenario.oldSheet.grid.length, 3);
+  const [headers, , , row] = scenario.newSheet.grid;
   assert.equal(row[headers.indexOf('部署名')], '新チーム');
   assert.equal(row[headers.indexOf('掲載文字情報')], '編集済みの掲載文');
   assert.equal(row[headers.indexOf('ページ名')], '合成ページ');
@@ -1303,6 +1323,63 @@ test('通常企画は区切り行の前、その他掲載情報は区切り行�
     grid.slice(1).map((row) => row[headers.indexOf('企画名')] || row[headers.indexOf('ページ名')]),
     ['通常1', '通常2', 'その他掲載情報', 'その他1', 'その他2']
   );
+});
+
+test('局別の既存行を保持し両ラベルを追加、区分内だけソートして再同期でも重複しない', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders).reverse();
+  const records = [
+    makeBureauRecord({ projectName: '通常B', matchProjectKeys: ['通常b'] }),
+    makeBureauRecord({ projectName: '通常A', matchProjectKeys: ['通常a'] }),
+    makeBureauRecord({ projectName: 'その他B', matchProjectKeys: ['その他b'], group: 'other',
+      sourceType: 'STAFF_OTHER_PUBLICATION' }),
+    makeBureauRecord({ projectName: 'その他A', matchProjectKeys: ['その他a'], group: 'other',
+      sourceType: 'STAFF_OTHER_PUBLICATION' })
+  ];
+  const rows = records.map(record => plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers)));
+  rows[0][headers.indexOf('掲載文字情報')] = '手動編集文';
+  rows[2][headers.indexOf('企画場所')] = '手動補完場所';
+  records[2].place = '';
+  const sheet = makeGridSheet([headers, ...rows.slice(0, 2),
+    plain(context.bureauOtherPublicationSeparatorRow_(headers)), ...rows.slice(2)]);
+  sheet.getName = () => '26企画局';
+  const output = () => ({ bureau: '企画局', sheet, values: sheet.grid.map(row => row.slice()) });
+  const delta = context.planBureauDelta_([output()], records);
+  assert.equal(delta.updates.length, 0);
+  assert.equal(delta.sectionOutputs.length, 1);
+  context.applyBureauDelta_(delta);
+  assert.deepEqual(sheet.grid.slice(1).map(row => row[headers.indexOf('企画名')] || row[headers.indexOf('ページ名')]),
+    ['企画情報', '通常A', '通常B', 'その他掲載情報', 'その他A', 'その他B']);
+  const entries = plain(context.existingBureauEntries_([output()]));
+  assert.deepEqual(entries.map(entry => entry.group), ['normal', 'normal', 'other', 'other']);
+  assert.equal(entries[1].row[headers.indexOf('掲載文字情報')], '手動編集文');
+  assert.equal(entries[3].row[headers.indexOf('企画場所')], '手動補完場所');
+  const before = JSON.stringify(sheet.grid);
+  const next = context.planBureauDelta_([output()], records);
+  assert.equal(next.reviews.length, 0);
+  assert.equal(next.sectionOutputs.length, 0);
+  context.applyBureauDelta_(next);
+  assert.equal(JSON.stringify(sheet.grid), before);
+
+  records[0].staffName = '更新担当';
+  context.applyBureauDelta_(context.planBureauDelta_([output()], records));
+  assert.equal(sheet.grid[3][headers.indexOf('担当者名')], '更新担当');
+  assert.equal(sheet.grid[1][headers.indexOf('ページ名')], '企画情報');
+});
+
+test('空の局と通常回答のみの局にも両ラベルを追加する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const record = makeBureauRecord();
+  const row = plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers));
+  for (const rows of [[], [row]]) {
+    const sheet = makeGridSheet([headers, ...rows]);
+    sheet.getName = () => '26企画局';
+    const output = { bureau: '企画局', sheet, values: sheet.grid.map(value => value.slice()) };
+    const records = rows.length ? [makeBureauRecord({ staffName: '更新担当' })] : [];
+    context.applyBureauDelta_(context.planBureauDelta_([output], records));
+    assert.equal(sheet.grid[1][headers.indexOf('ページ名')], '企画情報');
+    assert.equal(sheet.grid.at(-1)[headers.indexOf('ページ名')], 'その他掲載情報');
+    if (rows.length) assert.equal(sheet.grid[2][headers.indexOf('担当者名')], '更新担当');
+  }
 });
 
 test('旧12列から手動6列を初期化して18列へ移行する', () => {

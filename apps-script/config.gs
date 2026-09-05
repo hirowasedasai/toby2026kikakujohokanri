@@ -195,6 +195,7 @@ var APP_CONFIG = Object.freeze({
     '修正必要'
   ]),
   bureauOtherPublicationSourceType: 'STAFF_OTHER_PUBLICATION',
+  bureauProjectInformationSectionLabel: '企画情報',
   bureauOtherPublicationSectionLabel: 'その他掲載情報',
   bureauOtherPublicationSectionBackground: '#5b73b7',
   bureauFrozenThroughHeader: '掲載媒体',

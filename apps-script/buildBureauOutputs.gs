@@ -701,26 +701,38 @@ function manualReviewFromRecord_(record, reason) {
 }
 
 function isBureauOtherPublicationSeparatorRow_(row, headerIndex) {
+  return isBureauSectionRow_(row, headerIndex, APP_CONFIG.bureauOtherPublicationSectionLabel);
+}
+
+function isBureauSectionRow_(row, headerIndex, label) {
   var pageColumn = headerIndex[normalizeHeader_('ページ名')];
   var projectColumn = headerIndex[normalizeHeader_('企画名')];
   return pageColumn !== undefined &&
-    normalizeText_(row[pageColumn]) === APP_CONFIG.bureauOtherPublicationSectionLabel &&
+    normalizeText_(row[pageColumn]) === label &&
     (projectColumn === undefined || !normalizeText_(row[projectColumn]));
 }
 
 function bureauOtherPublicationSeparatorRow_(headers) {
+  return bureauSectionRow_(headers, APP_CONFIG.bureauOtherPublicationSectionLabel);
+}
+
+function bureauSectionRow_(headers, label) {
   return headers.map(function (header) {
     return normalizeHeader_(header) === normalizeHeader_('ページ名')
-      ? APP_CONFIG.bureauOtherPublicationSectionLabel
+      ? label
       : '';
   });
 }
 
 function bureauOtherPublicationSeparatorNumber_(values) {
+  return bureauSectionNumber_(values, APP_CONFIG.bureauOtherPublicationSectionLabel);
+}
+
+function bureauSectionNumber_(values, label) {
   if (!values || values.length < 2) return 0;
   var headerIndex = buildHeaderIndex_(values[0]);
   for (var offset = 1; offset < values.length; offset += 1) {
-    if (isBureauOtherPublicationSeparatorRow_(values[offset], headerIndex)) return offset + 1;
+    if (isBureauSectionRow_(values[offset], headerIndex, label)) return offset + 1;
   }
   return 0;
 }
@@ -733,6 +745,10 @@ function existingBureauEntries_(bureauOutputs) {
     var projectColumn = index[normalizeHeader_('企画名')];
     var group = 'normal';
     output.values.slice(1).forEach(function (row, offset) {
+      if (isBureauSectionRow_(row, index, APP_CONFIG.bureauProjectInformationSectionLabel)) {
+        group = 'normal';
+        return;
+      }
       if (isBureauOtherPublicationSeparatorRow_(row, index)) {
         group = 'other';
         return;
@@ -781,6 +797,10 @@ function planBureauDelta_(bureauOutputs, records) {
   });
 
   var delta = {
+    sectionOutputs: bureauOutputs.filter(function (output) {
+      return bureauSectionNumber_(output.values, APP_CONFIG.bureauProjectInformationSectionLabel) === 0 ||
+        bureauOtherPublicationSeparatorNumber_(output.values) === 0;
+    }),
     appends: [],
     updates: [],
     deletes: [],
@@ -935,33 +955,50 @@ function writeBureauAppendGroup_(group) {
 function sortAndStyleBureauSections_(output) {
   var sheet = output.sheet;
   var values = readSheetValues_(sheet);
-  if (values.length < 2) return;
   var headers = values[0];
   var index = buildHeaderIndex_(headers);
+  // Add labels only after row updates/moves, so planned row numbers remain valid.
+  var normalSectionRow = bureauSectionNumber_(values, APP_CONFIG.bureauProjectInformationSectionLabel);
+  if (normalSectionRow === 0) {
+    sheet.insertRowsBefore(2, 1);
+    normalSectionRow = 2;
+    sheet.getRange(normalSectionRow, 1, 1, headers.length)
+      .setValues([bureauSectionRow_(headers, APP_CONFIG.bureauProjectInformationSectionLabel)]);
+    values = readSheetValues_(sheet);
+  }
   var separatorRow = bureauOtherPublicationSeparatorNumber_(values);
+  if (separatorRow === 0) {
+    separatorRow = sheet.getLastRow() + 1;
+    sheet.getRange(separatorRow, 1, 1, headers.length)
+      .setValues([bureauOtherPublicationSeparatorRow_(headers)]);
+  }
   var lastRow = sheet.getLastRow();
   var sortSpec = [
     { column: index[normalizeHeader_('部署名')] + 1, ascending: true },
     { column: index[normalizeHeader_('企画名')] + 1, ascending: true }
   ];
-  var normalLastRow = separatorRow > 0 ? separatorRow - 1 : lastRow;
-  if (normalLastRow >= 3) {
-    sheet.getRange(2, 1, normalLastRow - 1, headers.length).sort(sortSpec);
+  var normalLastRow = separatorRow - 1;
+  var normalStartRow = normalSectionRow + 1;
+  if (normalLastRow > normalStartRow) {
+    sheet.getRange(normalStartRow, 1, normalLastRow - normalStartRow + 1, headers.length).sort(sortSpec);
   }
   if (separatorRow > 0 && lastRow > separatorRow + 1) {
     sheet.getRange(separatorRow + 1, 1, lastRow - separatorRow, headers.length).sort(sortSpec);
   }
-  if (separatorRow > 0) {
-    sheet.getRange(separatorRow, 1, 1, headers.length)
+  [normalSectionRow, separatorRow].forEach(function (rowNumber) {
+    sheet.getRange(rowNumber, 1, 1, headers.length)
       .clearDataValidations()
       .setBackground(APP_CONFIG.bureauOtherPublicationSectionBackground)
       .setFontColor('#ffffff')
       .setFontWeight('bold');
-  }
+  });
 }
 
 function applyBureauDelta_(delta) {
   var affectedOutputs = {};
+  (delta.sectionOutputs || []).forEach(function (output) {
+    affectedOutputs[output.bureau] = output;
+  });
   delta.updates.forEach(function (update) {
     update.segments.forEach(function (segment) {
       update.output.sheet.getRange(update.rowNumber, segment.startColumn, 1, segment.values.length)
