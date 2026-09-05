@@ -18,6 +18,8 @@ const requiredFiles = [
   'apps-script/buildOutputs.gs',
   'apps-script/buildBureauOutputs.gs',
   'apps-script/bureauResponseSelection.gs',
+  'apps-script/resize.gs',
+  'apps-script/image_resize.gs.gs',
   'apps-script/validation.gs',
   'apps-script/logger.gs',
   'apps-script/utils.gs',
@@ -50,14 +52,19 @@ const manifest = JSON.parse(
   await readFile(path.join(repoRoot, 'apps-script/appsscript.json'), 'utf8')
 );
 const expectedScopes = [
-  'https://www.googleapis.com/auth/spreadsheets.currentonly',
-  'https://www.googleapis.com/auth/script.scriptapp'
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/script.scriptapp',
+  'https://www.googleapis.com/auth/drive',
+  'https://www.googleapis.com/auth/script.external_request'
 ];
 if (
   manifest.timeZone !== 'Asia/Tokyo' ||
   manifest.runtimeVersion !== 'V8' ||
   manifest.exceptionLogging !== 'STACKDRIVER' ||
-  JSON.stringify(manifest.oauthScopes) !== JSON.stringify(expectedScopes)
+  JSON.stringify(manifest.oauthScopes) !== JSON.stringify(expectedScopes) ||
+  JSON.stringify(manifest.dependencies) !== JSON.stringify({
+    enabledAdvancedServices: [{ userSymbol: 'Drive', version: 'v3', serviceId: 'drive' }]
+  })
 ) {
   console.error('Apps Script manifest does not match the approved runtime or scopes.');
   process.exit(1);
@@ -88,12 +95,12 @@ for (const environment of ['staging', 'production']) {
 const appsScriptSource = (
   await Promise.all(
     requiredFiles
-      .filter((relativePath) => relativePath.endsWith('.gs'))
+      .filter((relativePath) => relativePath.endsWith('.gs') && relativePath !== 'apps-script/image_resize.gs.gs')
       .map((relativePath) => readFile(path.join(repoRoot, relativePath), 'utf8'))
   )
 ).join('\n');
 if (appsScriptSource.includes('UrlFetchApp')) {
-  console.error('External URL access is not allowed in the Apps Script runtime.');
+  console.error('External URL access is allowed only in the Google thumbnail utility.');
   process.exit(1);
 }
 

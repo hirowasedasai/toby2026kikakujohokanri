@@ -37,7 +37,9 @@ const stagingConfig = JSON.parse(
   await readFile(path.join(repoRoot, '.clasp.staging.json'), 'utf8')
 );
 const gitSha = run('git', ['rev-parse', '--short=12', 'HEAD'], { capture: true });
-run('npx', ['--no-install', 'clasp', 'push'], { secrets: [stagingConfig.scriptId] });
+run(process.execPath, ['scripts/check-remote-code.mjs', '--before']);
+run('npx', ['--no-install', 'clasp', 'push']);
+run(process.execPath, ['scripts/check-remote-code.mjs']);
 run('npx', ['--no-install', 'clasp', 'version', `staging ${gitSha}`], {
   secrets: [stagingConfig.scriptId]
 });

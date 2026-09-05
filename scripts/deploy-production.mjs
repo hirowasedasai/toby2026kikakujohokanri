@@ -82,7 +82,10 @@ if (answer !== 'PRODUCTION') {
 
 run(process.execPath, ['scripts/select-environment.mjs', 'production']);
 const gitSha = run('git', ['rev-parse', '--short=12', 'HEAD'], { capture: true });
-run('npx', ['--no-install', 'clasp', 'push'], { secrets: [scriptId] });
+run(process.execPath, ['scripts/check-remote-code.mjs', '--before']);
+// Keep the TTY available for clasp's manifest confirmation (never --force).
+run('npx', ['--no-install', 'clasp', 'push']);
+run(process.execPath, ['scripts/check-remote-code.mjs']);
 run('npx', ['--no-install', 'clasp', 'version', `production ${gitSha}`], {
   secrets: [scriptId]
 });

@@ -24,6 +24,8 @@
 
 productionスクリプトは`main`、clean worktree、verifyを強制し、`--force`を使わない。通常のbound scriptのため`clasp deploy`は使わず、追跡用versionだけを作る。
 
+push前にGitに存在しない本番ファイルがないか検査する。manifestの変更確認は端末で内容を確認して回答する。push後にリモートの全ファイルとローカルコードを比較し、一致した場合だけversionを作成する。`Skipping push.`や内容不一致をdeploy成功と扱わない。画像処理の環境別フォルダIDは[画像処理の管理](image-processing.md)に従ってScript Propertiesへ移す。画像処理そのものはdeploy検証で実行しない。
+
 ## 禁止事項
 
 - Apps Script editorでのコード手編集
