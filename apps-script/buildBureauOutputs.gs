@@ -737,6 +737,18 @@ function bureauSectionNumber_(values, label) {
   return 0;
 }
 
+function isBureauPlaceholderRow_(row, headers) {
+  // Only untouched check defaults are harmless. Keep unnamed manual content,
+  // numbers, completed checks and unknown columns in the review workflow.
+  return row.every(function (value, column) {
+    var text = normalizeText_(value);
+    if (!text) return true;
+    var header = normalizeHeader_(headers[column]);
+    return (header === normalizeHeader_('当媒チェック') ||
+      header === normalizeHeader_('校閲チェック')) && text === '未確認';
+  });
+}
+
 function existingBureauEntries_(bureauOutputs) {
   var entries = [];
   bureauOutputs.forEach(function (output) {
@@ -753,7 +765,7 @@ function existingBureauEntries_(bureauOutputs) {
         group = 'other';
         return;
       }
-      if (isBlankRow_(row)) return;
+      if (isBureauPlaceholderRow_(row, headers)) return;
       entries.push({
         id: entries.length,
         output: output,
@@ -1173,7 +1185,48 @@ function pendingManualReviewCountFromValues_(values) {
   }).length;
 }
 
-function syncManualReviewData_(reviewSheet, reviews) {
+function emptyBureauReviewResolutionReason_() {
+  return '入力回答と照合できない既存行を削除せず保持しています。' +
+    '【自動解消】局タブ全体を再確認し、企画名のない実データ行が残っていないため過去の空行警告を終了しました。';
+}
+
+function resolvedEmptyBureauReviewRows_(values, bureauOutputs, reviews) {
+  var index = buildHeaderIndex_(values[0] || []);
+  var activeKeys = {};
+  reviews.forEach(function (review) { activeKeys[review.reviewKey] = true; });
+  var safeSheets = {};
+  bureauOutputs.forEach(function (output) {
+    var outputIndex = buildHeaderIndex_(output.values[0] || []);
+    if (!APP_CONFIG.bureauOutputHeaders.every(function (header) {
+      return outputIndex[normalizeHeader_(header)] !== undefined;
+    })) return;
+    // Never trust an old row number after sorting/insertion. An unnamed,
+    // substantive row anywhere in this bureau blocks automatic completion.
+    if (!existingBureauEntries_([output]).some(function (entry) { return !entry.projectKey; })) {
+      safeSheets[output.sheet.getName()] = output.bureau;
+    }
+  });
+  function cell(row, header) { return normalizeText_(row[index[normalizeHeader_(header)]]); }
+  var resolved = [];
+  values.slice(1).forEach(function (row, offset) {
+    var source = cell(row, '入力タブ');
+    var key = cell(row, '確認キー');
+    var sourceRow = cell(row, '入力行');
+    if (!safeSheets[source] || safeSheets[source] !== cell(row, '所属局') ||
+      !/^[1-9][0-9]*$/.test(sourceRow) || Number(sourceRow) < 2 ||
+      key !== source + ':' + sourceRow || activeKeys[key] ||
+      cell(row, '対応状況') !== '未対応') return;
+    var reason = cell(row, '要確認理由');
+    if (reason !== '入力回答と照合できない既存行を削除せず保持しています。' &&
+      reason !== emptyBureauReviewResolutionReason_()) return;
+    if (['受付日時', '部署名', '企画名', '担当者名', '変更前', '変更後', '変更前画像', '変更後画像']
+      .some(function (header) { return cell(row, header) !== ''; })) return;
+    resolved.push(offset + 2);
+  });
+  return resolved;
+}
+
+function syncManualReviewData_(reviewSheet, reviews, bureauOutputs, resolutionIssues) {
   var latestValues = readSheetValues_(reviewSheet.sheet);
   var headers = latestValues[0];
   var index = buildHeaderIndex_(headers);
@@ -1209,6 +1262,29 @@ function syncManualReviewData_(reviewSheet, reviews) {
       .getRange(reviewSheet.sheet.getLastRow() + 1, 1, appends.length, headers.length)
       .setValues(appends);
   }
+  // This is intentionally limited to legacy empty orphan notices, not change
+  // requests, duplicate answers or orphan notices carrying project information.
+  if (bureauOutputs) {
+    var liveOutputs = bureauOutputs.map(function (output) {
+      return { bureau: output.bureau, sheet: output.sheet, values: readSheetValues_(output.sheet) };
+    });
+    resolvedEmptyBureauReviewRows_(readSheetValues_(reviewSheet.sheet), liveOutputs, reviews)
+      .forEach(function (rowNumber) {
+        try {
+          // Record why before completing, so an interrupted write stays auditable.
+          reviewSheet.sheet.getRange(rowNumber, index[normalizeHeader_('要確認理由')] + 1)
+            .setValues([[emptyBureauReviewResolutionReason_()]]);
+          reviewSheet.sheet.getRange(rowNumber, statusColumn + 1).setValues([['対応済み']]);
+        } catch (error) {
+          if (!resolutionIssues) throw error;
+          resolutionIssues.push(makeIssue_('ERROR', 'E_MANUAL_REVIEW_RESOLUTION_FAILED',
+            '空行警告の完了更新に失敗しました。次回の局別同期で再確認します。', {
+              sourceSheet: APP_CONFIG.sheets.manualReview, rowNumber: rowNumber,
+              columnName: '対応状況'
+            }));
+        }
+      });
+  }
   var pending = pendingManualReviewCountFromValues_(readSheetValues_(reviewSheet.sheet));
   reviewSheet.sheet.setTabColor(pending > 0 ? '#d93025' : null);
   return pending;
@@ -1233,8 +1309,8 @@ function performBuildBureauOutputs_(suppliedPreflight, executionId) {
   var delta = planBureauDelta_(bureauOutputs, plan.records);
   applyBureauDelta_(delta);
   var allReviews = plan.reviews.concat(delta.reviews);
-  var pendingReviews = syncManualReviewData_(manualReview, allReviews);
   var issues = plan.issues.concat(delta.issues);
+  var pendingReviews = syncManualReviewData_(manualReview, allReviews, bureauOutputs, issues);
   var summary = {
     created: delta.created,
     updated: delta.updated,

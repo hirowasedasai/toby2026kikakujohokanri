@@ -1754,6 +1754,128 @@ test('入力と照合できない既存行は削除せず要手動確認へ残�
   assert.equal(delta.issues[0].code, 'E_BUREAU_ORPHAN_PRESERVED');
 });
 
+test('局別の空行と未確認だけの行を無視し、手動内容・数値・確認済みは警告して保持する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders).reverse();
+  const row = (fields) => headers.map((header) => fields[header] ?? '');
+  const placeholders = [row({}), row({ '当媒チェック': '未確認' }),
+    row({ '当媒チェック': '未確認', '校閲チェック': '未確認' })];
+  const substantive = ['企画名', '掲載文字情報', '備考', '担当者名', '企画日時']
+    .map((header) => row({ [header]: '手動入力', '当媒チェック': '未確認' }));
+  substantive.push(row({ '掲載文字情報': 0 }), row({ '校閲チェック': '確認済み' }),
+    row({ '当媒チェック': false }), row({ '掲載文字情報': '=1+1' }));
+  const output = { bureau: '企画局', sheet: { getName: () => '26企画局' },
+    values: [headers, ...placeholders, ...substantive] };
+  const before = plain(output.values);
+  const delta = context.planBureauDelta_([output], []);
+  assert.equal(delta.reviews.length, substantive.length);
+  assert.equal(delta.issues.length, substantive.length);
+  assert.equal(delta.deletes.length + delta.updates.length + delta.appends.length, 0);
+  assert.deepEqual(plain(output.values), before);
+  assert.equal(context.isBureauPlaceholderRow_(['未確認'], ['未知の列']), false);
+});
+
+function emptyOrphanReviewRow(headers, fields = {}) {
+  const values = { '確認キー': '26企画局:6', '所属局': '企画局', '入力タブ': '26企画局',
+    '入力行': 6, '要確認理由': '入力回答と照合できない既存行を削除せず保持しています。',
+    '対応状況': '未対応', ...fields };
+  return headers.map((header) => values[header] ?? '');
+}
+
+test('過去の空行警告だけを再確認して完了し、履歴・局の値を保持して繰り返し実行できる', () => {
+  const headers = plain(context.APP_CONFIG.manualReviewHeaders).reverse();
+  const outputHeaders = plain(context.APP_CONFIG.bureauOutputHeaders).reverse();
+  const outputRows = [outputHeaders,
+    ...['企画情報', 'その他掲載情報'].map((label) => outputHeaders.map((h) => h === 'ページ名' ? label : '')),
+    outputHeaders.map((h) => ['当媒チェック', '校閲チェック'].includes(h) ? '未確認' : ''),
+    outputHeaders.map((h) => h === '企画名' ? '移動後の実企画' : '')];
+  const bureauSheet = makeGridSheet(outputRows);
+  bureauSheet.getName = () => '26企画局';
+  // Deliberately stale pre-sync values: cleanup must read the current sheet.
+  const output = { bureau: '企画局', sheet: bureauSheet, values: [outputHeaders,
+    outputHeaders.map((h) => h === '備考' ? '古い未命名行' : '')] };
+  const oldReviews = Array.from({ length: 6 }, (_, i) => emptyOrphanReviewRow(headers,
+    { '確認キー': `26企画局:${i + 2}`, '入力行': i + 2 }));
+  const sheet = makeGridSheet([headers, ...oldReviews]);
+  const reviewSheet = { sheet, values: sheet.grid };
+  const beforeOutput = plain(bureauSheet.grid);
+  assert.equal(context.syncManualReviewData_(reviewSheet, [], [output]), 0);
+  assert.equal(sheet.grid.length, 7);
+  sheet.grid.slice(1).forEach((r, i) => {
+    assert.equal(r[headers.indexOf('対応状況')], '対応済み');
+    assert.match(r[headers.indexOf('要確認理由')], /【自動解消】/);
+    headers.forEach((h, c) => {
+      if (!['対応状況', '要確認理由'].includes(h)) assert.equal(r[c], oldReviews[i][c]);
+    });
+  });
+  assert.equal(sheet.tabColor, null);
+  const once = plain(sheet.grid);
+  assert.equal(context.syncManualReviewData_(reviewSheet, [], [output]), 0);
+  assert.deepEqual(plain(sheet.grid), once);
+  assert.deepEqual(plain(bureauSheet.grid), beforeOutput);
+});
+
+test('空行警告の完了書き込み失敗は個別に記録し、後続行を継続して次回再試行する', () => {
+  const headers = plain(context.APP_CONFIG.manualReviewHeaders);
+  const sheet = makeGridSheet([headers, emptyOrphanReviewRow(headers),
+    emptyOrphanReviewRow(headers, { '確認キー': '26企画局:7', '入力行': 7 })]);
+  const getRange = sheet.getRange;
+  sheet.getRange = function (row, column, ...rest) {
+    if (row === 2 && column === headers.indexOf('対応状況') + 1) {
+      return { setValues() { throw new Error('sensitive response text'); } };
+    }
+    return getRange.call(this, row, column, ...rest);
+  };
+  const bureauSheet = makeGridSheet([plain(context.APP_CONFIG.bureauOutputHeaders)]);
+  bureauSheet.getName = () => '26企画局';
+  const output = { bureau: '企画局', sheet: bureauSheet };
+  const issues = [];
+  assert.equal(context.syncManualReviewData_({ sheet }, [], [output], issues), 1);
+  assert.equal(sheet.grid[1][headers.indexOf('対応状況')], '未対応');
+  assert.equal(sheet.grid[2][headers.indexOf('対応状況')], '対応済み');
+  assert.equal(sheet.tabColor, '#d93025');
+  assert.equal(issues[0].code, 'E_MANUAL_REVIEW_RESOLUTION_FAILED');
+  assert.equal(issues[0].rowNumber, 2);
+  assert.equal(JSON.stringify(issues).includes('sensitive response text'), false);
+  sheet.getRange = getRange;
+  assert.equal(context.syncManualReviewData_({ sheet }, [], [output], []), 0);
+  assert.equal(sheet.tabColor, null);
+});
+
+test('古い行番号が移動しても未命名の実データが同じ局にあれば警告を自動解消しない', () => {
+  const headers = plain(context.APP_CONFIG.manualReviewHeaders);
+  const review = emptyOrphanReviewRow(headers);
+  const outputHeaders = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const content = outputHeaders.map((h) => h === '掲載文字情報' ? '保持する文章' : '');
+  const output = makeBureauOutputState('企画局', [[], [], content]);
+  assert.deepEqual(plain(context.resolvedEmptyBureauReviewRows_([headers, review], [output], [])), []);
+  const otherBureau = makeBureauOutputState('渉外局', [content]);
+  assert.deepEqual(plain(context.resolvedEmptyBureauReviewRows_([headers, review],
+    [makeBureauOutputState('企画局'), otherBureau], [])), [2]);
+  const missingHeaders = { ...output, values: [['企画名']] };
+  assert.deepEqual(plain(context.resolvedEmptyBureauReviewRows_([headers, review], [missingHeaders], [])), []);
+});
+
+test('内容付き警告・変更申請・重複・人の対応状況・発生中の警告は自動解消しない', () => {
+  const headers = plain(context.APP_CONFIG.manualReviewHeaders).reverse();
+  const rows = [
+    ...['受付日時', '部署名', '企画名', '担当者名', '変更前', '変更後', '変更前画像', '変更後画像']
+      .map((header) => emptyOrphanReviewRow(headers, { [header]: '確認が必要' })),
+    emptyOrphanReviewRow(headers, { '要確認理由': '回答が重複しています' }),
+    emptyOrphanReviewRow(headers, { '対応状況': '確認中' }),
+    emptyOrphanReviewRow(headers, { '対応状況': '対応済み' }),
+    emptyOrphanReviewRow(headers, { '確認キー': '26運スタ企画変更申請:6', '入力タブ': '26運スタ企画変更申請' }),
+    emptyOrphanReviewRow(headers, { '確認キー': '26企画局:99' }),
+    emptyOrphanReviewRow(headers, { '所属局': '渉外局' })
+  ];
+  const output = makeBureauOutputState('企画局');
+  assert.deepEqual(plain(context.resolvedEmptyBureauReviewRows_([headers, ...rows], [output], [])), []);
+  assert.deepEqual(plain(context.resolvedEmptyBureauReviewRows_(
+    [headers, emptyOrphanReviewRow(headers)], [output], [{ reviewKey: '26企画局:6' }])), []);
+  // A reason write that succeeded before an interrupted status write is retryable.
+  const interrupted = emptyOrphanReviewRow(headers, { '要確認理由': context.emptyBureauReviewResolutionReason_() });
+  assert.deepEqual(plain(context.resolvedEmptyBureauReviewRows_([headers, interrupted], [output], [])), [2]);
+});
+
 test('要手動確認は対応済みを除いて未対応件数を数える', () => {
   const headers = plain(context.APP_CONFIG.manualReviewHeaders);
   const statusIndex = headers.indexOf('対応状況');
