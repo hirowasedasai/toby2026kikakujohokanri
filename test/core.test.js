@@ -49,6 +49,31 @@ for (const file of [
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const masterHeaders = plain(context.APP_CONFIG.masterHeaders);
 
+function makeValidationApp() {
+  return {
+    DataValidationCriteria: { VALUE_IN_LIST: 'VALUE_IN_LIST' },
+    newDataValidation() {
+      const definition = { values: [], showDropdown: false, allowInvalid: true };
+      return {
+        requireValueInList(values, showDropdown) {
+          definition.values = plain(values);
+          definition.showDropdown = showDropdown;
+          return this;
+        },
+        setAllowInvalid(value) { definition.allowInvalid = value; return this; },
+        build() {
+          return { ...definition,
+            getCriteriaType: () => 'VALUE_IN_LIST',
+            getCriteriaValues: () => [definition.values, definition.showDropdown],
+            getAllowInvalid: () => definition.allowInvalid
+          };
+        }
+      };
+    }
+  };
+}
+context.SpreadsheetApp = makeValidationApp();
+
 function makeBatch(headers, rows, source = { name: '26参参フォーム回答', type: 'FORM', priority: 10 }) {
   const resolution = context.resolveHeaders_(
     headers,
@@ -114,8 +139,12 @@ function makeBureauRecord(overrides = {}) {
 
 function makeGridSheet(initialValues) {
   const grid = initialValues.map((row) => row.slice());
+  const validationGrid = initialValues.map(() => []);
+  const validationWrites = [];
   return {
     grid,
+    validationGrid,
+    validationWrites,
     tabColor: null,
     getLastRow() {
       return grid.length;
@@ -128,6 +157,7 @@ function makeGridSheet(initialValues) {
     },
     insertRowsBefore(row, count) {
       grid.splice(row - 1, 0, ...Array.from({ length: count }, () => []));
+      validationGrid.splice(row - 1, 0, ...Array.from({ length: count }, () => []));
     },
     getRange(row, column, rowCount = 1, columnCount = 1) {
       return {
@@ -146,6 +176,18 @@ function makeGridSheet(initialValues) {
         },
         getFontWeights() {
           return Array.from({ length: rowCount }, () => new Array(columnCount).fill('normal'));
+        },
+        getDataValidations() {
+          return Array.from({ length: rowCount }, (_, r) =>
+            Array.from({ length: columnCount }, (_, c) => validationGrid[row - 1 + r]?.[column - 1 + c] ?? null));
+        },
+        setDataValidation(rule) {
+          validationWrites.push({ row, column, rowCount, columnCount });
+          for (let r = row - 1; r < row - 1 + rowCount; r += 1) {
+            if (!validationGrid[r]) validationGrid[r] = [];
+            for (let c = column - 1; c < column - 1 + columnCount; c += 1) validationGrid[r][c] = rule;
+          }
+          return this;
         },
         setValues(values) {
           values.forEach((sourceRow, rowOffset) => {
@@ -169,7 +211,13 @@ function makeGridSheet(initialValues) {
           grid.splice(row - 1, rowCount, ...rows);
           return this;
         },
-        clearDataValidations() { return this; },
+        clearDataValidations() {
+          for (let r = row - 1; r < row - 1 + rowCount; r += 1) {
+            if (!validationGrid[r]) validationGrid[r] = [];
+            for (let c = column - 1; c < column - 1 + columnCount; c += 1) validationGrid[r][c] = null;
+          }
+          return this;
+        },
         setBackground() { return this; },
         setFontColor() { return this; },
         setFontWeight() { return this; }
@@ -1595,25 +1643,7 @@ test('局別タブの入力規則と固定列を現在のヘッダー名から�
     frozenRows: 0,
     frozenColumns: 0
   };
-  context.SpreadsheetApp = {
-    newDataValidation() {
-      const definition = { values: [], showDropdown: false, allowInvalid: true };
-      return {
-        requireValueInList(values, showDropdown) {
-          definition.values = plain(values);
-          definition.showDropdown = showDropdown;
-          return this;
-        },
-        setAllowInvalid(value) {
-          definition.allowInvalid = value;
-          return this;
-        },
-        build() {
-          return { ...definition };
-        }
-      };
-    }
-  };
+  context.SpreadsheetApp = makeValidationApp();
   const sheet = {
     getMaxRows: () => 1000,
     getMaxColumns: () => 26,
@@ -1675,6 +1705,79 @@ test('局別タブの入力規則と固定列を現在のヘッダー名から�
     operations.widths.find((entry) => headers[entry.column - 1] === '企画紹介文').width,
     260
   );
+});
+
+test('局別チェックの欠落・非表示・誤った選択肢だけを補修し、値と他列の規則を保持する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders).reverse();
+  const row = fields => headers.map(header => fields[header] ?? '');
+  const sheet = makeGridSheet([headers, row({ 'ページ名': '企画情報' }),
+    row({ '企画名': '通常企画', '当媒チェック': '確認済み', '校閲チェック': '修正必要' }),
+    row({ 'ページ名': 'その他掲載情報' }),
+    row({ '企画名': 'その他', '掲載文字情報': '=1+1', '当媒チェック': '確認中' }), row({})]);
+  sheet.getMaxRows = () => 8;
+  const checks = ['当媒チェック', '校閲チェック'].map(h => headers.indexOf(h));
+  const correct = context.buildBureauListValidation_(context.APP_CONFIG.bureauCheckStatusOptions);
+  const hidden = { ...correct, getCriteriaValues: () => [plain(context.APP_CONFIG.bureauCheckStatusOptions), false] };
+  const wrong = context.buildBureauListValidation_(['誤った選択肢']);
+  const permissive = { ...correct, getAllowInvalid: () => true };
+  const checkbox = { ...correct, getCriteriaType: () => 'CHECKBOX' };
+  const otherColumn = headers.indexOf('掲載媒体');
+  sheet.validationGrid[2][checks[0]] = correct;
+  sheet.validationGrid[2][checks[1]] = hidden;
+  sheet.validationGrid[4][checks[0]] = wrong;
+  sheet.validationGrid[4][checks[1]] = permissive;
+  sheet.validationGrid[5][checks[0]] = checkbox;
+  sheet.validationGrid[2][otherColumn] = wrong;
+  const before = plain(sheet.grid);
+  context.repairBureauCheckValidations_(sheet, sheet.grid);
+  assert.deepEqual(plain(sheet.grid), before);
+  assert.equal(sheet.validationGrid[2][checks[0]], correct);
+  assert.equal(sheet.validationGrid[2][otherColumn], wrong);
+  for (let r = 1; r < 8; r += 1) {
+    for (const c of checks) {
+      if ([1, 3].includes(r)) assert.equal(sheet.validationGrid[r][c] ?? null, null);
+      else assert.equal(context.bureauCheckValidationMatches_(sheet.validationGrid[r][c]), true);
+    }
+  }
+  assert.equal(sheet.validationWrites.every(write => checks.includes(write.column - 1)), true);
+  const writes = sheet.validationWrites.length;
+  context.repairBureauCheckValidations_(sheet, sheet.grid);
+  assert.equal(sheet.validationWrites.length, writes);
+});
+
+test('データ差分なしの同期とラベル隣への新規追加の両方でチェックプルダウンを復元する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const record = makeBureauRecord();
+  const normalRow = plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers));
+  normalRow[headers.indexOf('当媒チェック')] = '確認済み';
+  const sheet = makeGridSheet([headers, plain(context.bureauSectionRow_(headers, '企画情報')),
+    normalRow, plain(context.bureauOtherPublicationSeparatorRow_(headers))]);
+  sheet.getName = () => '26企画局';
+  const output = () => ({ bureau: '企画局', sheet, values: sheet.grid.map(row => row.slice()) });
+  const delta = context.planBureauDelta_([output()], [record]);
+  assert.equal(delta.created + delta.updated + delta.sectionOutputs.length, 0);
+  const before = plain(sheet.grid);
+  context.applyBureauDelta_(delta);
+  assert.deepEqual(plain(sheet.grid), before);
+  const check = headers.indexOf('当媒チェック');
+  assert.equal(context.bureauCheckValidationMatches_(sheet.validationGrid[2][check]), true);
+  const newRecord = makeBureauRecord({ projectName: '新規企画', matchProjectKeys: ['新規企画'] });
+  context.applyBureauDelta_(context.planBureauDelta_([output()], [record, newRecord]));
+  assert.equal(sheet.grid.length, 5);
+  for (let r = 1; r < sheet.grid.length; r += 1) {
+    const isProject = Boolean(sheet.grid[r][headers.indexOf('企画名')]);
+    for (const header of ['当媒チェック', '校閲チェック']) {
+      const rule = sheet.validationGrid[r]?.[headers.indexOf(header)];
+      assert.equal(Boolean(rule), isProject);
+      if (isProject) assert.equal(context.bureauCheckValidationMatches_(rule), true);
+    }
+  }
+  assert.equal(sheet.grid.find(row => row[headers.indexOf('企画名')] === record.projectName)[check], '確認済み');
+  const once = plain(sheet.grid);
+  const writes = sheet.validationWrites.length;
+  context.applyBureauDelta_(context.planBureauDelta_([output()], [record, newRecord]));
+  assert.deepEqual(plain(sheet.grid), once);
+  assert.equal(sheet.validationWrites.length, writes);
 });
 
 test('差分更新は手動列を保持し、原典変更時だけ確認状態を戻す', () => {

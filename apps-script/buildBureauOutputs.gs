@@ -541,6 +541,46 @@ function applyBureauListValidation_(sheet, headerIndex, header, values) {
     .setDataValidation(buildBureauListValidation_(values));
 }
 
+function bureauCheckValidationMatches_(rule) {
+  if (!rule || rule.getCriteriaType() !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST ||
+    rule.getAllowInvalid()) return false;
+  var criteria = rule.getCriteriaValues();
+  var options = criteria[0];
+  return criteria[1] === true && Array.isArray(options) &&
+    options.length === APP_CONFIG.bureauCheckStatusOptions.length &&
+    options.every(function (value, index) {
+      return value === APP_CONFIG.bureauCheckStatusOptions[index];
+    });
+}
+
+function repairBureauCheckValidations_(sheet, values) {
+  var headers = values[0] || [];
+  var index = buildHeaderIndex_(headers);
+  var rowCount = sheet.getMaxRows() - 1;
+  if (rowCount < 1) return;
+  var rule = null;
+  ['当媒チェック', '校閲チェック'].forEach(function (header) {
+    var column = index[normalizeHeader_(header)];
+    if (column === undefined) return;
+    var validations = sheet.getRange(2, column + 1, rowCount, 1).getDataValidations();
+    var start = -1;
+    // Coalesce only invalid/missing cells; preserve already correct dropdowns.
+    for (var offset = 0; offset <= rowCount; offset += 1) {
+      var row = values[offset + 1] || [];
+      var label = isBureauSectionRow_(row, index, APP_CONFIG.bureauProjectInformationSectionLabel) ||
+        isBureauOtherPublicationSeparatorRow_(row, index);
+      var needsRepair = offset < rowCount && !label &&
+        !bureauCheckValidationMatches_(validations[offset][0]);
+      if (needsRepair && start < 0) start = offset;
+      if (!needsRepair && start >= 0) {
+        if (!rule) rule = buildBureauListValidation_(APP_CONFIG.bureauCheckStatusOptions);
+        sheet.getRange(start + 2, column + 1, offset - start, 1).setDataValidation(rule);
+        start = -1;
+      }
+    }
+  });
+}
+
 function applyBureauSheetPresentation_(sheet, headerIndex) {
   var dataRowCount = sheet.getMaxRows() - 1;
   if (dataRowCount > 0 && sheet.getMaxColumns() > 0) {
@@ -1054,6 +1094,9 @@ function repairBureauSectionFormatting_(output) {
       .setFontColor('#ffffff')
       .setFontWeight('bold');
   });
+  // New rows may inherit the adjacent label's lack of validation. Restore the
+  // check dropdowns after all insertions/sorts, including no-data-change syncs.
+  repairBureauCheckValidations_(sheet, values);
 }
 
 function applyBureauDelta_(delta) {
