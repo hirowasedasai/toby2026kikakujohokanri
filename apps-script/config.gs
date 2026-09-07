@@ -368,10 +368,22 @@ var APP_CONFIG = Object.freeze({
     introduction: Object.freeze(['企画紹介文（75字以内）']),
     publicationText: Object.freeze(['掲載文字情報']),
     place: Object.freeze(['企画場所（正式名称）']),
-    firstDayStart: Object.freeze(['11月7日(土)企画開始時間']),
-    firstDayEnd: Object.freeze(['11月7日(土)企画終了時間']),
-    secondDayStart: Object.freeze(['11月8日(日)企画開始時間']),
-    secondDayEnd: Object.freeze(['11月8日(日)企画終了時間']),
+    firstDayStart: Object.freeze([
+      '11月7日(土)企画開始時間\n*確定していない方は未定で提出してください',
+      '11月7日(土)企画開始時間'
+    ]),
+    firstDayEnd: Object.freeze([
+      '11月7日(土)企画終了時間\n*確定していない方は未定で提出してください',
+      '11月7日(土)企画終了時間'
+    ]),
+    secondDayStart: Object.freeze([
+      '11月8日(日)企画開始時間\n*確定していない方は未定で提出してください',
+      '11月8日(日)企画開始時間'
+    ]),
+    secondDayEnd: Object.freeze([
+      '11月8日(日)企画終了時間\n*確定していない方は未定で提出してください',
+      '11月8日(日)企画終了時間'
+    ]),
     otherSchedule: Object.freeze(['当日企画でない場合は、企画日時を詳細に記入してください。']),
     genres: Object.freeze(['企画ジャンル']),
     mainGenre: Object.freeze(['企画ジャンル(メイン)', '企画ジャンル（メイン）']),

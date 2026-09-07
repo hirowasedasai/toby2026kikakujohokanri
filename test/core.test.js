@@ -995,6 +995,51 @@ test('同じ企画名の通常回答が複数ある変更申請は自動反映�
   );
 });
 
+test('注意書き付き・旧形式の日時4列を列順によらず読み取り局別の空欄へ差分反映する', () => {
+  for (const suffix of ['', '\n*確定していない方は未定で提出してください']) {
+    const cells = [
+      ['所属局', '企画局'], ['部署名（チーム、PJなど）', '合成部署'],
+      ['担当者名', '合成担当'], ['企画名（26字以内）', '日時検証企画'],
+      ['11月7日(土)企画開始時間' + suffix, '10:00'],
+      ['11月7日(土)企画終了時間' + suffix, '17:00'],
+      ['11月8日(日)企画開始時間' + suffix, '11:00'],
+      ['11月8日(日)企画終了時間' + suffix, '16:30']
+    ].reverse();
+    const input = { source: { name: '26運スタ企画フォーム回答', type: 'STAFF_FORM' },
+      values: [cells.map(cell => cell[0]), cells.map(cell => cell[1])] };
+    const before = JSON.stringify(input);
+    const plan = context.buildBureauOutputPlan_([input]);
+    assert.equal(plan.records.length, 1);
+    const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
+    const record = plan.records[0];
+    const previous = plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers));
+    previous[headers.indexOf('企画日時')] = '';
+    previous[headers.indexOf('掲載文字情報')] = '手動編集済み';
+    const delta = context.planBureauDelta_([makeBureauOutputState('企画局', [previous])], plan.records);
+    assert.equal(delta.updated, 1);
+    assert.equal(delta.created, 0);
+    assert.equal(delta.updates[0].row[headers.indexOf('企画日時')], '11/7 10:00〜17:00 / 11/8 11:00〜16:30');
+    assert.equal(delta.updates[0].row[headers.indexOf('掲載文字情報')], '手動編集済み');
+    assert.equal(JSON.stringify(input), before);
+    const next = context.planBureauDelta_([
+      makeBureauOutputState('企画局', [plain(delta.updates[0].row)])
+    ], plan.records);
+    assert.equal(next.updated, 0);
+  }
+});
+
+test('日時注意書きの空白・全角表記を許容し、未定・片側未入力を保持する', () => {
+  const headers = [
+    '11月7日（土）企画開始時間\n＊確定していない方は未定で提出してください',
+    '11月7日（土）企画終了時間\n＊確定していない方は未定で提出してください',
+    '11月8日（日）企画開始時間\n＊確定していない方は未定で提出してください',
+    '11月8日（日）企画終了時間\n＊確定していない方は未定で提出してください'
+  ];
+  const record = context.bureauRecordFromInputRow_(['未定', '', '12:00', ''], 2,
+    { source: { name: '26運スタ企画フォーム回答', type: 'STAFF_FORM' } }, context.buildHeaderPositions_(headers));
+  assert.equal(context.scheduleSummary_(record), '11/7 未定 / 11/8 12:00');
+});
+
 test('その他掲載情報フォームを局別専用入力として解決する', () => {
   const source = context.APP_CONFIG.sheets.inputs.find(
     (input) => input.type === 'STAFF_OTHER_PUBLICATION'
