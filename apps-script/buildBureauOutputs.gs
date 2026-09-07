@@ -541,26 +541,34 @@ function applyBureauListValidation_(sheet, headerIndex, header, values) {
     .setDataValidation(buildBureauListValidation_(values));
 }
 
-function bureauCheckValidationMatches_(rule) {
+function bureauDropdownDefinitions_() {
+  return [
+    { header: '掲載媒体', options: APP_CONFIG.bureauPublicationMediaOptions },
+    { header: '当媒チェック', options: APP_CONFIG.bureauCheckStatusOptions },
+    { header: '校閲チェック', options: APP_CONFIG.bureauCheckStatusOptions }
+  ];
+}
+
+function bureauListValidationMatches_(rule, expectedOptions) {
   if (!rule || rule.getCriteriaType() !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST ||
     rule.getAllowInvalid()) return false;
   var criteria = rule.getCriteriaValues();
   var options = criteria[0];
   return criteria[1] === true && Array.isArray(options) &&
-    options.length === APP_CONFIG.bureauCheckStatusOptions.length &&
+    options.length === expectedOptions.length &&
     options.every(function (value, index) {
-      return value === APP_CONFIG.bureauCheckStatusOptions[index];
+      return value === expectedOptions[index];
     });
 }
 
-function repairBureauCheckValidations_(sheet, values) {
+function repairBureauDropdownValidations_(sheet, values) {
   var headers = values[0] || [];
   var index = buildHeaderIndex_(headers);
   var rowCount = sheet.getMaxRows() - 1;
   if (rowCount < 1) return;
-  var rule = null;
-  ['当媒チェック', '校閲チェック'].forEach(function (header) {
-    var column = index[normalizeHeader_(header)];
+  bureauDropdownDefinitions_().forEach(function (definition) {
+    var rule = null;
+    var column = index[normalizeHeader_(definition.header)];
     if (column === undefined) return;
     var validations = sheet.getRange(2, column + 1, rowCount, 1).getDataValidations();
     var start = -1;
@@ -570,10 +578,10 @@ function repairBureauCheckValidations_(sheet, values) {
       var label = isBureauSectionRow_(row, index, APP_CONFIG.bureauProjectInformationSectionLabel) ||
         isBureauOtherPublicationSeparatorRow_(row, index);
       var needsRepair = offset < rowCount && !label &&
-        !bureauCheckValidationMatches_(validations[offset][0]);
+        !bureauListValidationMatches_(validations[offset][0], definition.options);
       if (needsRepair && start < 0) start = offset;
       if (!needsRepair && start >= 0) {
-        if (!rule) rule = buildBureauListValidation_(APP_CONFIG.bureauCheckStatusOptions);
+        if (!rule) rule = buildBureauListValidation_(definition.options);
         sheet.getRange(start + 2, column + 1, offset - start, 1).setDataValidation(rule);
         start = -1;
       }
@@ -586,18 +594,12 @@ function applyBureauSheetPresentation_(sheet, headerIndex) {
   if (dataRowCount > 0 && sheet.getMaxColumns() > 0) {
     sheet.getRange(2, 1, dataRowCount, sheet.getMaxColumns()).clearDataValidations();
   }
-  applyBureauListValidation_(
-    sheet,
-    headerIndex,
-    '掲載媒体',
-    APP_CONFIG.bureauPublicationMediaOptions
-  );
-  ['当媒チェック', '校閲チェック'].forEach(function (header) {
+  bureauDropdownDefinitions_().forEach(function (definition) {
     applyBureauListValidation_(
       sheet,
       headerIndex,
-      header,
-      APP_CONFIG.bureauCheckStatusOptions
+      definition.header,
+      definition.options
     );
   });
 
@@ -1095,8 +1097,8 @@ function repairBureauSectionFormatting_(output) {
       .setFontWeight('bold');
   });
   // New rows may inherit the adjacent label's lack of validation. Restore the
-  // check dropdowns after all insertions/sorts, including no-data-change syncs.
-  repairBureauCheckValidations_(sheet, values);
+  // media/check dropdowns after all insertions/sorts, including no-data-change syncs.
+  repairBureauDropdownValidations_(sheet, values);
 }
 
 function applyBureauDelta_(delta) {

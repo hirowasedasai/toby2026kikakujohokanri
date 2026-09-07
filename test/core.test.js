@@ -1721,7 +1721,7 @@ test('局別チェックの欠落・非表示・誤った選択肢だけを補�
   const wrong = context.buildBureauListValidation_(['誤った選択肢']);
   const permissive = { ...correct, getAllowInvalid: () => true };
   const checkbox = { ...correct, getCriteriaType: () => 'CHECKBOX' };
-  const otherColumn = headers.indexOf('掲載媒体');
+  const otherColumn = headers.indexOf('整理券情報');
   sheet.validationGrid[2][checks[0]] = correct;
   sheet.validationGrid[2][checks[1]] = hidden;
   sheet.validationGrid[4][checks[0]] = wrong;
@@ -1729,27 +1729,59 @@ test('局別チェックの欠落・非表示・誤った選択肢だけを補�
   sheet.validationGrid[5][checks[0]] = checkbox;
   sheet.validationGrid[2][otherColumn] = wrong;
   const before = plain(sheet.grid);
-  context.repairBureauCheckValidations_(sheet, sheet.grid);
+  context.repairBureauDropdownValidations_(sheet, sheet.grid);
   assert.deepEqual(plain(sheet.grid), before);
   assert.equal(sheet.validationGrid[2][checks[0]], correct);
   assert.equal(sheet.validationGrid[2][otherColumn], wrong);
   for (let r = 1; r < 8; r += 1) {
     for (const c of checks) {
       if ([1, 3].includes(r)) assert.equal(sheet.validationGrid[r][c] ?? null, null);
-      else assert.equal(context.bureauCheckValidationMatches_(sheet.validationGrid[r][c]), true);
+      else assert.equal(context.bureauListValidationMatches_(sheet.validationGrid[r][c], context.APP_CONFIG.bureauCheckStatusOptions), true);
     }
   }
-  assert.equal(sheet.validationWrites.every(write => checks.includes(write.column - 1)), true);
+  assert.equal(sheet.validationWrites.every(write => [...checks, headers.indexOf('掲載媒体')].includes(write.column - 1)), true);
   const writes = sheet.validationWrites.length;
-  context.repairBureauCheckValidations_(sheet, sheet.grid);
+  context.repairBureauDropdownValidations_(sheet, sheet.grid);
   assert.equal(sheet.validationWrites.length, writes);
 });
 
-test('データ差分なしの同期とラベル隣への新規追加の両方でチェックプルダウンを復元する', () => {
+test('掲載媒体の欠落・非表示・別リストをヘッダー順によらず補修し、既存値と正しい規則を保持する', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders).reverse();
+  const media = headers.indexOf('掲載媒体');
+  const options = context.APP_CONFIG.bureauPublicationMediaOptions;
+  const selectedValues = ['パンフレット', 'Webサイト', 'パンフ／Web', '旧媒体表記', '=1+1', ''];
+  const sheet = makeGridSheet([headers,
+    plain(context.bureauSectionRow_(headers, '企画情報')),
+    ...selectedValues.map(value => headers.map(h => h === '掲載媒体' ? value : '')),
+    plain(context.bureauOtherPublicationSeparatorRow_(headers))]);
+  sheet.getMaxRows = () => 12;
+  const correct = context.buildBureauListValidation_(options);
+  sheet.validationGrid[2][media] = correct;
+  sheet.validationGrid[3][media] = { ...correct, getCriteriaValues: () => [plain(options), false] };
+  sheet.validationGrid[4][media] = context.buildBureauListValidation_(context.APP_CONFIG.bureauCheckStatusOptions);
+  sheet.validationGrid[5][media] = { ...correct, getAllowInvalid: () => true };
+  const before = plain(sheet.grid);
+  context.repairBureauDropdownValidations_(sheet, sheet.grid);
+  assert.deepEqual(plain(sheet.grid), before);
+  assert.equal(sheet.validationGrid[2][media], correct);
+  for (let r = 1; r < 12; r += 1) {
+    const rule = sheet.validationGrid[r]?.[media];
+    if ([1, 8].includes(r)) assert.equal(rule ?? null, null);
+    else assert.equal(context.bureauListValidationMatches_(rule, options), true);
+  }
+  assert.deepEqual(plain(sheet.validationGrid[3][media].getCriteriaValues()),
+    [['パンフレット', 'Webサイト', 'パンフ／Web'], true]);
+  const writes = sheet.validationWrites.length;
+  context.repairBureauDropdownValidations_(sheet, sheet.grid);
+  assert.equal(sheet.validationWrites.length, writes);
+});
+
+test('データ差分なしの同期とラベル隣への新規追加の両方で媒体・チェックのプルダウンを復元する', () => {
   const headers = plain(context.APP_CONFIG.bureauOutputHeaders);
   const record = makeBureauRecord();
   const normalRow = plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers));
   normalRow[headers.indexOf('当媒チェック')] = '確認済み';
+  normalRow[headers.indexOf('掲載媒体')] = 'パンフ／Web';
   const sheet = makeGridSheet([headers, plain(context.bureauSectionRow_(headers, '企画情報')),
     normalRow, plain(context.bureauOtherPublicationSeparatorRow_(headers))]);
   sheet.getName = () => '26企画局';
@@ -1760,19 +1792,21 @@ test('データ差分なしの同期とラベル隣への新規追加の両方�
   context.applyBureauDelta_(delta);
   assert.deepEqual(plain(sheet.grid), before);
   const check = headers.indexOf('当媒チェック');
-  assert.equal(context.bureauCheckValidationMatches_(sheet.validationGrid[2][check]), true);
+  assert.equal(context.bureauListValidationMatches_(sheet.validationGrid[2][check], context.APP_CONFIG.bureauCheckStatusOptions), true);
+  assert.equal(context.bureauListValidationMatches_(sheet.validationGrid[2][headers.indexOf('掲載媒体')], context.APP_CONFIG.bureauPublicationMediaOptions), true);
   const newRecord = makeBureauRecord({ projectName: '新規企画', matchProjectKeys: ['新規企画'] });
   context.applyBureauDelta_(context.planBureauDelta_([output()], [record, newRecord]));
   assert.equal(sheet.grid.length, 5);
   for (let r = 1; r < sheet.grid.length; r += 1) {
     const isProject = Boolean(sheet.grid[r][headers.indexOf('企画名')]);
-    for (const header of ['当媒チェック', '校閲チェック']) {
+    for (const { header, options } of context.bureauDropdownDefinitions_()) {
       const rule = sheet.validationGrid[r]?.[headers.indexOf(header)];
       assert.equal(Boolean(rule), isProject);
-      if (isProject) assert.equal(context.bureauCheckValidationMatches_(rule), true);
+      if (isProject) assert.equal(context.bureauListValidationMatches_(rule, options), true);
     }
   }
   assert.equal(sheet.grid.find(row => row[headers.indexOf('企画名')] === record.projectName)[check], '確認済み');
+  assert.equal(sheet.grid.find(row => row[headers.indexOf('企画名')] === record.projectName)[headers.indexOf('掲載媒体')], 'パンフ／Web');
   const once = plain(sheet.grid);
   const writes = sheet.validationWrites.length;
   context.applyBureauDelta_(context.planBureauDelta_([output()], [record, newRecord]));
