@@ -797,6 +797,7 @@ function planBureauDelta_(bureauOutputs, records) {
   });
 
   var delta = {
+    bureauOutputs: bureauOutputs,
     sectionOutputs: bureauOutputs.filter(function (output) {
       return bureauSectionNumber_(output.values, APP_CONFIG.bureauProjectInformationSectionLabel) === 0 ||
         bureauOtherPublicationSeparatorNumber_(output.values) === 0;
@@ -985,7 +986,56 @@ function sortAndStyleBureauSections_(output) {
   if (separatorRow > 0 && lastRow > separatorRow + 1) {
     sheet.getRange(separatorRow + 1, 1, lastRow - separatorRow, headers.length).sort(sortSpec);
   }
-  [normalSectionRow, separatorRow].forEach(function (rowNumber) {
+  repairBureauSectionFormatting_(output);
+}
+
+function bureauInheritedStyleRanges_(values, backgrounds, fontColors, fontWeights) {
+  var headers = values[0];
+  var index = buildHeaderIndex_(headers);
+  var result = { backgrounds: [], fontColors: [], fontWeights: [] };
+  backgrounds.forEach(function (row, offset) {
+    var valuesRow = values[offset + 1] || [];
+    if (isBureauSectionRow_(valuesRow, index, APP_CONFIG.bureauProjectInformationSectionLabel) ||
+        isBureauOtherPublicationSeparatorRow_(valuesRow, index)) return;
+    var masks = { backgrounds: [], fontColors: [], fontWeights: [] };
+    row.forEach(function (color, column) {
+      var inherited = String(color).toLowerCase() === APP_CONFIG.bureauOtherPublicationSectionBackground;
+      masks.backgrounds.push(inherited);
+      masks.fontColors.push(inherited && String(fontColors[offset][column]).toLowerCase() === '#ffffff');
+      masks.fontWeights.push(inherited && fontWeights[offset][column] === 'bold');
+    });
+    Object.keys(masks).forEach(function (kind) {
+      var start = -1;
+      for (var column = 0; column <= row.length; column += 1) {
+        if (masks[kind][column] && start < 0) start = column;
+        if (!masks[kind][column] && start >= 0) {
+          result[kind].push(columnLetter_(start + 1) + (offset + 2) + ':' +
+            columnLetter_(column) + (offset + 2));
+          start = -1;
+        }
+      }
+    });
+  });
+  return result;
+}
+
+function repairBureauSectionFormatting_(output) {
+  var sheet = output.sheet;
+  var values = readSheetValues_(sheet);
+  var headers = values[0];
+  if (!headers || sheet.getMaxRows() < 2) return;
+  // Inserted rows inherit neighboring label formatting, including blank future rows.
+  // Repair only that reserved background; preserve other manual colors and all values.
+  var range = sheet.getRange(2, 1, sheet.getMaxRows() - 1, headers.length);
+  var repairs = bureauInheritedStyleRanges_(values, range.getBackgrounds(),
+    range.getFontColors(), range.getFontWeights());
+  if (repairs.backgrounds.length) sheet.getRangeList(repairs.backgrounds).setBackground(null);
+  if (repairs.fontColors.length) sheet.getRangeList(repairs.fontColors).setFontColor(null);
+  if (repairs.fontWeights.length) sheet.getRangeList(repairs.fontWeights).setFontWeight('normal');
+  [bureauSectionNumber_(values, APP_CONFIG.bureauProjectInformationSectionLabel),
+    bureauOtherPublicationSeparatorNumber_(values)].filter(function (rowNumber) {
+    return rowNumber > 0;
+  }).forEach(function (rowNumber) {
     sheet.getRange(rowNumber, 1, 1, headers.length)
       .clearDataValidations()
       .setBackground(APP_CONFIG.bureauOtherPublicationSectionBackground)
@@ -1071,6 +1121,10 @@ function applyBureauDelta_(delta) {
 
   Object.keys(affectedOutputs).forEach(function (key) {
     sortAndStyleBureauSections_(affectedOutputs[key]);
+  });
+  // Also repair existing color bleed when no form data changed.
+  (delta.bureauOutputs || []).forEach(function (output) {
+    if (!affectedOutputs[output.bureau]) repairBureauSectionFormatting_(output);
   });
 }
 

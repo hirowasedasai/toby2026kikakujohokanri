@@ -120,6 +120,9 @@ function makeGridSheet(initialValues) {
     getLastRow() {
       return grid.length;
     },
+    getMaxRows() {
+      return grid.length;
+    },
     getLastColumn() {
       return grid.reduce((width, row) => Math.max(width, row.length), 0);
     },
@@ -134,6 +137,15 @@ function makeGridSheet(initialValues) {
               grid[row - 1 + rowOffset]?.[column - 1 + columnOffset] ?? ''
             )
           );
+        },
+        getBackgrounds() {
+          return Array.from({ length: rowCount }, () => new Array(columnCount).fill('#ffffff'));
+        },
+        getFontColors() {
+          return Array.from({ length: rowCount }, () => new Array(columnCount).fill('#000000'));
+        },
+        getFontWeights() {
+          return Array.from({ length: rowCount }, () => new Array(columnCount).fill('normal'));
         },
         setValues(values) {
           values.forEach((sourceRow, rowOffset) => {
@@ -1380,6 +1392,80 @@ test('空の局と通常回答のみの局にも両ラベルを追加する', ()
     assert.equal(sheet.grid.at(-1)[headers.indexOf('ページ名')], 'その他掲載情報');
     if (rows.length) assert.equal(sheet.grid[2][headers.indexOf('担当者名')], '更新担当');
   }
+});
+
+test('ラベル由来の書式だけを修復し、別の手動色・文字色・太字を保持する', () => {
+  const headers = ['企画名', 'ページ名', '掲載文字情報'];
+  const blue = context.APP_CONFIG.bureauOtherPublicationSectionBackground;
+  const values = [headers, ['', '企画情報', ''], ['通常', '', '手入力'],
+    ['', 'その他掲載情報', ''], ['その他', '', '手入力']];
+  const backgrounds = [[blue, blue, blue], [blue, '#ffff00', blue],
+    [blue, blue, blue], ['#ffffff', blue, blue], [blue, blue, blue]];
+  const colors = backgrounds.map(() => ['#ffffff', '#ff0000', '#ffffff']);
+  const weights = backgrounds.map(() => ['bold', 'bold', 'normal']);
+  const repairs = plain(context.bureauInheritedStyleRanges_(values, backgrounds, colors, weights));
+  assert.deepEqual(repairs.backgrounds, ['A3:A3', 'C3:C3', 'B5:C5', 'A6:C6']);
+  assert.deepEqual(repairs.fontColors, ['A3:A3', 'C3:C3', 'C5:C5', 'A6:A6', 'C6:C6']);
+  assert.deepEqual(repairs.fontWeights, ['A3:A3', 'B5:B5', 'A6:B6']);
+});
+
+test('データ差分がなくても色漏れを直し、再同期では修復書き込みが発生しない', () => {
+  const headers = plain(context.APP_CONFIG.bureauOutputHeaders).reverse();
+  const record = makeBureauRecord();
+  const row = plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers));
+  const sheet = makeGridSheet([headers,
+    plain(context.bureauSectionRow_(headers, '企画情報')), row,
+    plain(context.bureauOtherPublicationSeparatorRow_(headers))]);
+  sheet.getName = () => '26企画局';
+  sheet.getMaxRows = () => 5;
+  const blue = context.APP_CONFIG.bureauOtherPublicationSectionBackground;
+  const styles = Array.from({ length: 5 }, (_, r) => Array.from({ length: headers.length }, () => ({
+    background: r ? blue : '#ffffff', color: r ? '#ffffff' : '#000000', weight: r ? 'bold' : 'normal'
+  })));
+  const manualColumn = headers.indexOf('掲載文字情報');
+  styles[2][manualColumn] = { background: '#ffff00', color: '#ff0000', weight: 'bold' };
+  const baseGetRange = sheet.getRange.bind(sheet);
+  const writes = [];
+  sheet.getRange = (r, c, nr = 1, nc = 1) => {
+    const range = baseGetRange(r, c, nr, nc);
+    const cells = () => styles.slice(r - 1, r - 1 + nr).map(line => line.slice(c - 1, c - 1 + nc));
+    range.getBackgrounds = () => cells().map(line => line.map(cell => cell.background));
+    range.getFontColors = () => cells().map(line => line.map(cell => cell.color));
+    range.getFontWeights = () => cells().map(line => line.map(cell => cell.weight));
+    for (const [method, key] of [['setBackground', 'background'], ['setFontColor', 'color'], ['setFontWeight', 'weight']]) {
+      range[method] = value => { cells().flat().forEach(cell => { cell[key] = value; }); return range; };
+    }
+    return range;
+  };
+  sheet.getRangeList = addresses => {
+    const ranges = addresses.map(address => {
+      const [, from, r, to] = address.match(/^([A-Z]+)(\d+):([A-Z]+)\d+$/);
+      const column = letters => [...letters].reduce((n, letter) => n * 26 + letter.charCodeAt(0) - 64, 0);
+      return sheet.getRange(Number(r), column(from), 1, column(to) - column(from) + 1);
+    });
+    const result = {};
+    for (const method of ['setBackground', 'setFontColor', 'setFontWeight']) {
+      result[method] = value => { writes.push([method, addresses]); ranges.forEach(range => range[method](value)); return result; };
+    }
+    return result;
+  };
+  const output = { bureau: '企画局', sheet, values: sheet.grid };
+  const before = JSON.stringify(sheet.grid);
+  const delta = context.planBureauDelta_([output], [record]);
+  assert.equal(delta.updated + delta.created + delta.sectionOutputs.length, 0);
+  context.applyBureauDelta_(delta);
+  assert.equal(JSON.stringify(sheet.grid), before);
+  assert.equal(styles[1][0].background, blue);
+  assert.equal(styles[3][0].background, blue);
+  assert.equal(styles[2][0].background, null);
+  assert.equal(styles[2][0].color, null);
+  assert.equal(styles[2][0].weight, 'normal');
+  assert.equal(styles[4][0].background, null);
+  assert.deepEqual(styles[2][manualColumn], { background: '#ffff00', color: '#ff0000', weight: 'bold' });
+  assert.ok(writes.length > 0);
+  writes.length = 0;
+  context.applyBureauDelta_(context.planBureauDelta_([output], [record]));
+  assert.deepEqual(writes, []);
 });
 
 test('旧12列から手動6列を初期化して18列へ移行する', () => {
