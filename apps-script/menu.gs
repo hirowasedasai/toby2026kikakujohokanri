@@ -20,6 +20,8 @@ function onOpen() {
     .addItem('通常企画: 選択した同名回答を別企画として登録', 'registerSelectedSeparateProjects')
     .addItem('その他掲載情報: 文字情報の違う回答を別々に登録', 'registerSelectedSeparatePublications')
     .addItem('変更申請: 選択行の書式を補正して反映', 'registerSelectedChangeCorrection')
+    .addItem('変更申請: 変更先を指定して補正・反映', 'registerSelectedTargetedChangeCorrection')
+    .addItem('通常企画: 確認した再提出の最新回答を採用', 'adoptSelectedBureauResubmission')
     .addItem('処理ログを開く', 'openProcessLog')
     .addItem('環境情報を表示', 'showEnvironmentInfo')
     .addToUi();

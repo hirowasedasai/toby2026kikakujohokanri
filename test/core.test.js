@@ -1437,6 +1437,92 @@ test('書式補正は通常の完全一致検証を通して名称を反映し�
   assert.equal(next.reviews.length, 0);
 });
 
+test('明示した変更先だけへ別名申請を適用し、対象原本変更・局部署不一致では停止する', () => {
+  const s = makeBureauResolutionScenario();
+  s.inputs[1].values[1][4] = '合成内部呼称';
+  const targetId = `${s.inputs[0].source.name}:4`;
+  const before = '企画日時：「」';
+  const after = '企画日時：「11/7 10:00〜11:00」';
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正', before, after, targetId);
+  const original = JSON.stringify(s.inputs);
+  const result = context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  assert.equal(result.needsReview, 2);
+  assert.equal(JSON.stringify(s.inputs), original);
+  const saved = context.bureauResolutionSet_(s.preflight.spreadsheet);
+  assert.equal(saved[s.changeKey].targetId, targetId);
+  const plan = context.buildBureauOutputPlan_(s.inputs, null, {}, saved);
+  assert.equal(plan.records[2].projectName, '合成変更企画');
+  assert.equal(plan.records[2].scheduleOverride, '11/7 10:00〜11:00');
+  const live = s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid }));
+  const delta = context.planBureauDelta_(live, plan.records);
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+  s.inputs[0].values[3][5] = '対象の紹介文を変更';
+  assert.equal(context.buildBureauOutputPlan_(s.inputs, null, {}, saved).appliedChanges, 0);
+  s.inputs[0].values[3][5] = '紹介C';
+  for (const column of [1, 2]) {
+    const originalValue = s.inputs[1].values[1][column];
+    s.inputs[1].values[1][column] = '別部署・局';
+    const mismatch = context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正', before, after, targetId);
+    assert.equal(context.buildBureauOutputPlan_(s.inputs, null, {}, mismatch).appliedChanges, 0);
+    s.inputs[1].values[1][column] = originalValue;
+  }
+  assert.throws(() => context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正', before, after, s.changeKey),
+    error => error.code === 'E_BUREAU_RESOLUTION_TARGET');
+});
+
+function makeBureauResubmissionScenario() {
+  const s = makeBureauResolutionScenario();
+  s.inputs[0].values[1][0] = '2026-08-01T00:00:00Z';
+  s.inputs[0].values[2][0] = '2026-08-02T00:00:00Z';
+  return s;
+}
+
+test('確認済みの通常再提出は最新を採用し、原本・手動列・異名企画を保持して両確認行を完了する', () => {
+  const s = makeBureauResubmissionScenario();
+  const existing = s.preflight.bureauOutputs[0];
+  existing.sheet.grid[0].push(context.APP_CONFIG.bureauResponseIdHeader);
+  existing.sheet.grid[2].push(s.keys[0]);
+  existing.values = existing.sheet.grid.map(row => row.slice());
+  const original = JSON.stringify(s.inputs);
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.keys[1]], '再提出採用');
+  const result = context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  assert.equal(result.needsReview, 1);
+  assert.equal(JSON.stringify(s.inputs), original);
+  const sheet = s.preflight.bureauOutputs[0].sheet;
+  assert.equal(sheet.grid[2][sheet.grid[0].indexOf('企画紹介文')], '紹介B');
+  assert.equal(sheet.grid[2][sheet.grid[0].indexOf('掲載文字情報')], '校閲済み本文');
+  assert.equal(sheet.grid[2][sheet.grid[0].indexOf(context.APP_CONFIG.bureauResponseIdHeader)], s.keys[1]);
+  const resolutions = context.bureauResolutionSet_(s.preflight.spreadsheet);
+  const plan = context.buildBureauOutputPlan_(s.inputs, null, {}, resolutions);
+  assert.equal(plan.records.length, 2);
+  assert.equal(plan.records[1].projectName, '合成変更企画');
+  const delta = context.planBureauDelta_(s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid })), plan.records);
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+});
+
+test('古い・同時刻・別担当の再提出は拒否し、新規回答や原本変更や別企画承認があれば採用を停止する', () => {
+  const s = makeBureauResubmissionScenario();
+  assert.throws(() => context.proposeBureauResolutions_(s.inputs, [s.keys[0]], '再提出採用'));
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.keys[1]], '再提出採用');
+  for (const column of [0, 1, 2, 3, 5]) {
+    const previous = s.inputs[0].values[1][column];
+    s.inputs[0].values[1][column] = column === 0 ? s.inputs[0].values[2][0] : column === 1 ? '渉外局' : '変更した値';
+    const plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+    assert.equal(plan.records.length, 3);
+    assert.equal(plan.records[0].blockBureauSync, true);
+    assert.equal(Object.keys(plan.resolvedResponses).length, 0);
+    s.inputs[0].values[1][column] = previous;
+  }
+  s.inputs[0].values.push(['2026-08-03T00:00:00Z', '企画局', '合成部署', '合成担当', '合成同名企画', '紹介D', '']);
+  let plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  assert.equal(plan.records.length, 4);
+  assert.equal(Object.keys(plan.resolvedResponses).length, 0);
+  s.inputs[0].values.pop();
+  const separate = context.proposeBureauResolutions_(s.inputs, s.keys, '別企画');
+  plan = context.buildBureauOutputPlan_(s.inputs, null, {}, { ...separate, ...additions });
+  assert.equal(Object.keys(plan.resolvedResponses).length, 0);
+});
+
 test('補正変更前の不一致・画像・未対応項目・原本変更は上書きや完了扱いをしない', () => {
   for (const [before, after] of [['企画名：「誤った現在値」', '企画名：「新名称」'],
     ['掲載文字情報：「本文」', '掲載文字情報：「新本文」']]) {

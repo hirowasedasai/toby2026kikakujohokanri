@@ -267,9 +267,9 @@ function removeProjectIndexRecord_(index, key, record) {
   if (index[key].length === 0) delete index[key];
 }
 
-function evaluateStaffChange_(change, projectIndex) {
+function evaluateStaffChange_(change, projectIndex, explicitTarget) {
   var key = normalizeProjectNameKey_(change.projectName);
-  var matches = projectIndex[key] || [];
+  var matches = explicitTarget ? [explicitTarget] : projectIndex[key] || [];
   if (matches.length === 0) {
     return { applied: false, code: 'E_CHANGE_PROJECT_NOT_FOUND', reason: '企画名に一致する通常回答がありません。' };
   }
@@ -401,6 +401,11 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
     });
   });
 
+  var rawFingerprints = {};
+  baseRecords.forEach(function (record) { rawFingerprints[bureauResponseId_(record)] = bureauSourceFingerprint_(record); });
+  var selection = selectBureauResubmissions_(baseRecords, resolutions, reviews, issues);
+  skipped += baseRecords.length - selection.records.length;
+  baseRecords = selection.records;
   var projectIndex = {};
   baseRecords.filter(function (record) {
     return !isOtherPublicationRecord_(record);
@@ -427,8 +432,16 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
   });
   changeRecords.forEach(function (change) {
     var resolution = resolutions && resolutions[bureauResponseId_(change)];
+    var explicitTarget;
     if (resolution && resolution.kind === '変更補正') {
-      if (resolution.fingerprint !== bureauSourceFingerprint_(change)) {
+      if (resolution.targetId) {
+        explicitTarget = baseRecords.find(function (record) {
+          return record.sourceType === 'STAFF_FORM' && bureauResponseId_(record) === resolution.targetId;
+        });
+      }
+      if (resolution.fingerprint !== bureauSourceFingerprint_(change) || (resolution.targetId &&
+        (!explicitTarget || explicitTarget.blockBureauSync ||
+          resolution.targetFingerprint !== rawFingerprints[resolution.targetId]))) {
         skipped += 1;
         reviews.push(manualReviewFromChange_(change, '補正登録後に原本が変わったため再確認が必要です。'));
         issues.push(makeChangeReviewIssue_(change, 'E_BUREAU_RESOLUTION_STALE',
@@ -438,7 +451,7 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
       change.beforeChange = resolution.before;
       change.afterChange = resolution.after;
     }
-    var result = evaluateStaffChange_(change, projectIndex);
+    var result = evaluateStaffChange_(change, projectIndex, explicitTarget);
     if (result.applied) {
       appliedChanges += 1;
       if (resolution && resolution.kind === '変更補正') {
@@ -470,6 +483,7 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
     skipped: skipped,
     appliedChanges: appliedChanges,
     resolvedChanges: resolvedChanges,
+    resolvedResponses: selection.resolved,
     records: baseRecords,
     sourceRowCount: baseRecords.length + changeRecords.length
   };
@@ -929,7 +943,8 @@ function planBureauDelta_(bureauOutputs, records) {
     var candidates = uniqueEntries_(matchKeys.reduce(function (matches, key) {
       return matches.concat(existingByKey[bureauEntryKey_(group, key)] || []);
     }, [])).filter(function (entry) {
-      return !consumed[entry.id] && (!entry.responseId || entry.responseId === bureauResponseId_(record));
+      return !consumed[entry.id] && (!entry.responseId ||
+        (record.matchResponseIds || [bureauResponseId_(record)]).indexOf(entry.responseId) >= 0);
     });
     if (separate) candidates = separate.candidates;
     if (separate && separate.blocked) {
