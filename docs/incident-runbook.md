@@ -12,7 +12,7 @@
 
 ## エラーコード別の初動
 
-`E_BUREAU_RESOLUTION_*`は同名通常回答の別企画登録または変更申請補正に関する停止である。`SELECTION`・`GROUP`・`FORMAT`は選択行と補正の形式を確認する。`STALE`は原本が承認時から変わっているため再確認する。`NOT_APPLIED`は変更前の完全一致・画像・企画の一意性を確認する。`OUTPUT_AMBIGUOUS`・`E_BUREAU_SEPARATE_AMBIGUOUS`は既存行と`同期回答識別子`を確認し、手動内容を消さない。`HEADER_MISSING`・`INVALID`は`26局別確認結果`を権限者が点検する。`INCOMPLETE`・`STATUS_FAILED`や書き込み失敗では登録済みの確認結果を維持し、局別差分同期で再試行する。反映を確認できない行は対応済みにしない。
+`E_BUREAU_RESOLUTION_*`は同名通常回答の別企画登録、別掲載情報の登録、または変更申請補正に関する停止である。`TEXT_DUPLICATE`は掲載文字情報の空欄・同一内容を確認する。内容やリンク先を推測して自動選別しない。`SELECTION`・`GROUP`・`FORMAT`は選択行と補正の形式を確認する。`STALE`は原本が承認時から変わっているため再確認する。`NOT_APPLIED`は変更前の完全一致・画像・企画の一意性を確認する。`OUTPUT_AMBIGUOUS`・`E_BUREAU_SEPARATE_AMBIGUOUS`は既存行と`同期回答識別子`を確認し、手動内容を消さない。`HEADER_MISSING`・`INVALID`は`26局別確認結果`を権限者が点検する。`INCOMPLETE`・`STATUS_FAILED`や書き込み失敗では登録済みの確認結果を維持し、局別差分同期で再試行する。反映を確認できない行は対応済みにしない。
 
 | コード | 初動 |
 | --- | --- |

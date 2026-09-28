@@ -144,7 +144,7 @@ function guestSummary_(record) {
 
 function bureauOutputValueByHeader_(record, header) {
   if (normalizeHeader_(header) === normalizeHeader_(APP_CONFIG.bureauResponseIdHeader)) {
-    return isOtherPublicationRecord_(record) ? '' : bureauResponseId_(record);
+    return isOtherPublicationRecord_(record) && !record.separateProject ? '' : bureauResponseId_(record);
   }
   var values = {
     '企画名': record.projectName,
@@ -412,8 +412,18 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
   var resolvedChanges = {};
   baseRecords.forEach(function (record) {
     var resolution = resolutions && resolutions[bureauResponseId_(record)];
-    record.separateProject = Boolean(record.sourceType === 'STAFF_FORM' && resolution &&
-      resolution.kind === '別企画' && resolution.fingerprint === bureauSourceFingerprint_(record));
+    var expectedKind = Boolean(resolution &&
+      ((record.sourceType === 'STAFF_FORM' && resolution.kind === '別企画') ||
+        (isOtherPublicationRecord_(record) && resolution.kind === '別掲載情報')));
+    record.separateProject = expectedKind && resolution.fingerprint === bureauSourceFingerprint_(record);
+    if (expectedKind && !record.separateProject) {
+      record.blockBureauSync = true;
+      var reason = '別々に残す登録後に原本が変わったため、更新せず再確認が必要です。';
+      reviews.push(manualReviewFromRecord_(record, reason));
+      issues.push(makeIssue_('WARN', 'E_BUREAU_RESOLUTION_STALE', reason, {
+        sourceSheet: record.sourceSheet, rowNumber: record.rowNumber, columnName: '企画名'
+      }));
+    }
   });
   changeRecords.forEach(function (change) {
     var resolution = resolutions && resolutions[bureauResponseId_(change)];
@@ -895,6 +905,7 @@ function planBureauDelta_(bureauOutputs, records) {
   };
   var consumed = {};
   records.forEach(function (record) {
+    if (record.blockBureauSync) { delta.skipped += 1; return; }
     var finalKey = normalizeProjectNameKey_(record.projectName);
     var group = bureauRecordGroup_(record);
     var finalEntryKey = bureauEntryKey_(group, finalKey);

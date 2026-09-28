@@ -6,7 +6,7 @@ function bureauResponseId_(record) {
 function bureauSourceFingerprint_(record) {
   var snapshot = {};
   Object.keys(record).sort().forEach(function (key) {
-    if (['separateProject', 'changeStatus', 'lastChangeAt', 'matchProjectKeys'].indexOf(key) < 0) {
+    if (['separateProject', 'blockBureauSync', 'changeStatus', 'lastChangeAt', 'matchProjectKeys'].indexOf(key) < 0) {
       snapshot[key] = record[key];
     }
   });
@@ -29,7 +29,7 @@ function bureauResolutionSet_(spreadsheet) {
     var id = value('入力識別子');
     var kind = value('処理区分');
     var fingerprint = value('原本照合値');
-    if (!id || result[id] || ['別企画', '変更補正'].indexOf(kind) < 0 || !/^[a-f0-9]{64}$/.test(fingerprint)) {
+    if (!id || result[id] || ['別企画', '別掲載情報', '変更補正'].indexOf(kind) < 0 || !/^[a-f0-9]{64}$/.test(fingerprint)) {
       throw makeAppError_('E_BUREAU_RESOLUTION_INVALID', '局別確認結果の識別子・区分・原本照合値を確認してください。');
     }
     result[id] = { kind: kind, fingerprint: fingerprint,
@@ -53,22 +53,28 @@ function rawBureauRecords_(inputs) {
 function separateBureauMatches_(entries, records) {
   var groups = {};
   var result = {};
-  records.filter(function (record) { return record.sourceType === 'STAFF_FORM'; }).forEach(function (record) {
-    var key = normalizeProjectNameKey_(record.projectName);
+  records.filter(function (record) {
+    return record.sourceType === 'STAFF_FORM' || isOtherPublicationRecord_(record);
+  }).forEach(function (record) {
+    var key = bureauEntryKey_(bureauRecordGroup_(record), normalizeProjectNameKey_(record.projectName));
     if (!groups[key]) groups[key] = [];
     groups[key].push(record);
   });
   Object.keys(groups).forEach(function (key) {
     var group = groups[key];
     // A new or changed answer requires a new decision for the entire group.
-    if (!key || !group.every(function (record) { return record.separateProject; })) return;
+    if (!group.every(function (record) {
+      return normalizeProjectNameKey_(record.projectName) && record.separateProject;
+    })) return;
+    var recordGroup = bureauRecordGroup_(group[0]);
     var ids = group.map(bureauResponseId_);
     var aliases = {};
     group.forEach(function (record) {
-      (record.matchProjectKeys || [key]).forEach(function (alias) { aliases[alias] = true; });
+      (record.matchProjectKeys || [normalizeProjectNameKey_(record.projectName)])
+        .forEach(function (alias) { aliases[alias] = true; });
     });
     var candidates = entries.filter(function (entry) {
-      return entry.group === 'normal' && (aliases[entry.projectKey] || ids.indexOf(entry.responseId) >= 0);
+      return entry.group === recordGroup && (aliases[entry.projectKey] || ids.indexOf(entry.responseId) >= 0);
     });
     var mapping = {};
     ids.forEach(function (id) { mapping[id] = []; });
@@ -78,6 +84,16 @@ function separateBureauMatches_(entries, records) {
         return entry.responseId === bureauResponseId_(record);
       }) : group.filter(function (record) {
         var index = buildHeaderIndex_(entry.output.values[0]);
+        if (isOtherPublicationRecord_(record)) {
+          return normalizeText_(entry.output.bureau) === normalizeText_(record.bureau) &&
+            publicationIdentityText_(record.publicationText) &&
+            publicationIdentityText_(entry.row[index[normalizeHeader_('掲載文字情報')]]) ===
+              publicationIdentityText_(record.publicationText) &&
+            ['部署名', '担当者名'].every(function (header) {
+              return normalizeChangeValue_(entry.row[index[normalizeHeader_(header)]]) ===
+                normalizeChangeValue_(bureauOutputValueByHeader_(record, header));
+            });
+        }
         return normalizeText_(entry.output.bureau) === normalizeText_(record.bureau) &&
           (normalizeText_(record.introduction) || normalizeText_(guestSummary_(record))) &&
           ['部署名', '担当者名', '企画紹介文', 'ゲスト情報'].every(function (header) {
@@ -92,6 +108,10 @@ function separateBureauMatches_(entries, records) {
     ids.forEach(function (id) { result[id] = { candidates: mapping[id], blocked: blocked }; });
   });
   return result;
+}
+
+function publicationIdentityText_(value) {
+  return value === null || value === undefined ? '' : String(value).replace(/\r\n?/g, '\n').trim();
 }
 
 function bureauOutputsWithResponseIds_(outputs, records) {
@@ -200,7 +220,9 @@ function proposeBureauResolutions_(inputs, keys, kind, before, after) {
   var additions = {};
   keys.forEach(function (key) {
     var record = raw.find(function (candidate) { return bureauResponseId_(candidate) === key; });
-    if (!record || (kind === '別企画' ? record.sourceType !== 'STAFF_FORM' : record.sourceType !== 'STAFF_CHANGE')) {
+    var requiredType = kind === '別企画' ? 'STAFF_FORM' : kind === '別掲載情報'
+      ? APP_CONFIG.bureauOtherPublicationSourceType : kind === '変更補正' ? 'STAFF_CHANGE' : '';
+    if (!record || !requiredType || record.sourceType !== requiredType) {
       throw makeAppError_('E_BUREAU_RESOLUTION_SELECTION', '選択した入力種別はこの操作の対象外です。');
     }
     additions[key] = { kind: kind, fingerprint: bureauSourceFingerprint_(record), before: before || '', after: after || '' };
@@ -208,15 +230,23 @@ function proposeBureauResolutions_(inputs, keys, kind, before, after) {
   if (kind === '変更補正' && (keys.length !== 1 || !parseStructuredChange_(before).ok || !parseStructuredChange_(after).ok)) {
     throw makeAppError_('E_BUREAU_RESOLUTION_FORMAT', '変更申請を1行選び、補正前後を項目名：「内容」の形式で入力してください。');
   }
-  if (kind === '別企画') {
+  if (kind === '別企画' || kind === '別掲載情報') {
     keys.forEach(function (key) {
       var record = raw.find(function (candidate) { return bureauResponseId_(candidate) === key; });
       var group = raw.filter(function (candidate) {
-        return candidate.sourceType === 'STAFF_FORM' &&
+        return candidate.sourceType === record.sourceType &&
           normalizeProjectNameKey_(candidate.projectName) === normalizeProjectNameKey_(record.projectName);
       });
-      if (group.length < 2 || group.some(function (candidate) { return !additions[bureauResponseId_(candidate)]; })) {
-        throw makeAppError_('E_BUREAU_RESOLUTION_GROUP', '別企画として残す同名の通常回答をすべて選択してください。');
+      if ((kind === '別企画' && group.length < 2) ||
+        group.some(function (candidate) { return !additions[bureauResponseId_(candidate)]; })) {
+        throw makeAppError_('E_BUREAU_RESOLUTION_GROUP', '別々に残す同じ入力種別・同名の回答をすべて選択してください。');
+      }
+      if (kind === '別掲載情報') {
+        var texts = group.map(function (candidate) { return publicationIdentityText_(candidate.publicationText); });
+        if (texts.some(function (text, index) { return !text || texts.indexOf(text) !== index; })) {
+          throw makeAppError_('E_BUREAU_RESOLUTION_TEXT_DUPLICATE',
+            '掲載文字情報が空欄または同一の回答があります。内容が異なる掲載情報か確認してください。');
+        }
       }
     });
   }
@@ -257,7 +287,7 @@ function applyBureauResolutions_(preflight, additions, executionId) {
     bureauResponseExclusionSet_(preflight.spreadsheet), resolutions);
   var targetIds = {};
   Object.keys(additions).forEach(function (key) {
-    var targetId = additions[key].kind === '別企画' ? key : plan.resolvedChanges[key];
+    var targetId = additions[key].kind === '変更補正' ? plan.resolvedChanges[key] : key;
     if (!targetId) throw makeAppError_('E_BUREAU_RESOLUTION_NOT_APPLIED',
       '補正を適用できません。対象企画・変更前の完全一致・変更項目を確認してください。');
     targetIds[targetId] = true;
@@ -294,7 +324,8 @@ function registerBureauResolutionFromUi_(kind) {
   try {
     var spreadsheet = getBoundSpreadsheet_();
     validateEnvironment_(spreadsheet);
-    var keys = selectedBureauReviewKeys_(spreadsheet);
+    var keys = kind === '別掲載情報'
+      ? selectedOtherPublicationResolutionKeys_(spreadsheet) : selectedBureauReviewKeys_(spreadsheet);
     var before = '';
     var after = '';
     if (kind === '変更補正') {
@@ -314,7 +345,9 @@ function registerBureauResolutionFromUi_(kind) {
       return record.projectName + ' / ' + record.bureau + ' / 入力行 ' + record.rowNumber;
     }).join('\n');
     if (kind === '変更補正') description += '\n変更前:\n' + before + '\n変更後:\n' + after;
-    else description += '\n選択した回答をそれぞれ別企画として残します。';
+    else description += kind === '別掲載情報'
+      ? '\n文字情報が異なる回答をそれぞれ別の掲載情報として残します。'
+      : '\n選択した回答をそれぞれ別企画として残します。';
     if (ui.alert('局別の確認結果を登録', description + '\n反映を確認してから対応済みにします。続行しますか？',
       ui.ButtonSet.YES_NO) !== ui.Button.YES) return { cancelled: true };
     var result = withScriptLock_(function () {
@@ -340,4 +373,23 @@ function registerSelectedSeparateProjects() {
 
 function registerSelectedChangeCorrection() {
   return registerBureauResolutionFromUi_('変更補正');
+}
+
+function selectedOtherPublicationResolutionKeys_(spreadsheet) {
+  var sheet = spreadsheet.getActiveSheet();
+  var source = APP_CONFIG.sheets.inputs.find(function (input) {
+    return input.type === APP_CONFIG.bureauOtherPublicationSourceType;
+  });
+  if (!sheet || sheet.getName() !== source.name) return selectedBureauReviewKeys_(spreadsheet);
+  var range = sheet.getActiveRange();
+  if (!range || range.getRow() < 2 || range.getLastRow() > sheet.getLastRow()) {
+    throw makeAppError_('E_BUREAU_RESOLUTION_SELECTION', 'その他掲載情報の回答行だけを選択してください。');
+  }
+  return Array.from({ length: range.getNumRows() }, function (_, offset) {
+    return source.name + ':' + (range.getRow() + offset);
+  });
+}
+
+function registerSelectedSeparatePublications() {
+  return registerBureauResolutionFromUi_('別掲載情報');
 }

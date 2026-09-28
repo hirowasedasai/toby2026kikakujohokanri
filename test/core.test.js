@@ -1381,7 +1381,7 @@ test('同名の未選択回答・原本の変更・新しい回答は別企画�
   s.inputs[0].values[2][5] = '再確認が必要な原本変更';
   let plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
   let delta = context.planBureauDelta_(s.preflight.bureauOutputs, plan.records);
-  assert.equal(delta.reviews.filter(review => s.keys.includes(review.reviewKey)).length, 2);
+  assert.equal(plan.reviews.concat(delta.reviews).filter(review => s.keys.includes(review.reviewKey)).length, 2);
   s.inputs[0].values[2][5] = '紹介B';
   s.inputs[0].values.push(['T5', '企画局', '合成部署', '合成担当', '合成同名企画', '紹介D', '講師D']);
   plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
@@ -1509,6 +1509,109 @@ test('確認結果保存後に出力が失敗した場合は未対応を残し�
   const second = context.performBuildBureauOutputs_({ ...s.preflight,
     bureauOutputs: s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid })) }, 'again');
   assert.equal(second.created + second.updated, 0);
+});
+
+function makeSeparatePublicationScenario() {
+  const s = makeBureauResolutionScenario();
+  const source = context.APP_CONFIG.sheets.inputs.find(item => item.type === 'STAFF_OTHER_PUBLICATION');
+  const batch = { source, values: [
+    ['企画名（26字以内）', '掲載文字情報', '所属局', '部署名', '担当者名', '備考'],
+    ['合成同名企画', '異なる掲載本文A', '企画局', '合成部署', '合成担当', '備考A'],
+    ['合成同名企画', '異なる掲載本文B', '企画局', '合成部署', '合成担当', '備考B']
+  ] };
+  s.inputs.push(batch);
+  const output = s.preflight.bureauOutputs[0];
+  const headers = output.sheet.grid[0];
+  const records = context.buildBureauOutputPlan_([batch]).records;
+  for (const record of records) {
+    const row = plain(context.mergeBureauRecordWithManualRow_(record, null, null, headers));
+    row[headers.indexOf('掲載媒体')] = 'Webサイト';
+    row[headers.indexOf('当媒チェック')] = '確認済み';
+    row[headers.indexOf('企画場所')] = '手動補完した場所';
+    output.sheet.grid.push(row);
+    const reviewHeaders = s.reviewSheet.grid[0];
+    const review = context.manualReviewFromRecord_(record, '同名回答');
+    s.reviewSheet.grid.push(reviewHeaders.map(header => context.manualReviewValueByHeader_(review, header, {})));
+  }
+  output.values = output.sheet.grid.map(row => row.slice());
+  return { ...s, publicationBatch: batch, publicationKeys: records.map(record => context.bureauResponseId_(record)) };
+}
+
+test('同じ名前・媒体でも文字情報が異なる掲載回答を区別し手動文・補完セルを再同期で保持する', () => {
+  const s = makeSeparatePublicationScenario();
+  const original = JSON.stringify(s.inputs);
+  const normalBefore = s.preflight.bureauOutputs[0].sheet.grid[2].slice();
+  const additions = context.proposeBureauResolutions_(s.inputs, s.publicationKeys, '別掲載情報');
+  const result = context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 2);
+  assert.equal(result.needsReview, 3);
+  const sheet = s.preflight.bureauOutputs[0].sheet;
+  const headers = sheet.grid[0];
+  const idColumn = headers.indexOf(context.APP_CONFIG.bureauResponseIdHeader);
+  const rows = sheet.grid.filter(row => s.publicationKeys.includes(row[idColumn]));
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(row => row[headers.indexOf('掲載文字情報')]).sort(), ['異なる掲載本文A', '異なる掲載本文B']);
+  assert.ok(rows.every(row => row[headers.indexOf('掲載媒体')] === 'Webサイト'));
+  assert.ok(rows.every(row => row[headers.indexOf('企画場所')] === '手動補完した場所'));
+  assert.deepEqual(sheet.grid[2].slice(0, normalBefore.length), normalBefore);
+  rows[0][headers.indexOf('掲載文字情報')] = '校閲後に編集した本文';
+  rows[0][headers.indexOf('当媒チェック')] = '確認済み';
+  const next = context.buildBureauOutputPlan_(s.inputs, null, {}, context.bureauResolutionSet_(s.preflight.spreadsheet));
+  const live = s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid }));
+  const delta = context.planBureauDelta_(live, next.records.filter(record => s.publicationKeys.includes(context.bureauResponseId_(record))));
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+  assert.equal(delta.reviews.filter(review => s.publicationKeys.includes(review.reviewKey)).length, 0);
+  assert.equal(JSON.stringify(s.inputs), original);
+});
+
+test('同じ掲載文字情報・空欄・一部選択は別掲載情報として登録しない', () => {
+  const s = makeSeparatePublicationScenario();
+  assert.throws(() => context.proposeBureauResolutions_(s.inputs, [s.publicationKeys[0]], '別掲載情報'),
+    error => error.code === 'E_BUREAU_RESOLUTION_GROUP');
+  const textColumn = s.publicationBatch.values[0].indexOf('掲載文字情報');
+  for (const text of ['', '異なる掲載本文A']) {
+    s.publicationBatch.values[2][textColumn] = text;
+    assert.throws(() => context.proposeBureauResolutions_(s.inputs, s.publicationKeys, '別掲載情報'),
+      error => error.code === 'E_BUREAU_RESOLUTION_TEXT_DUPLICATE');
+  }
+});
+
+test('掲載情報の初回照合が曖昧なら本文と既存行を保持して登録前に停止する', () => {
+  const s = makeSeparatePublicationScenario();
+  const output = s.preflight.bureauOutputs[0];
+  const duplicate = output.values[output.values.length - 1].slice();
+  output.values.push(duplicate);
+  const before = JSON.stringify(output.values);
+  const additions = context.proposeBureauResolutions_(s.inputs, s.publicationKeys, '別掲載情報');
+  assert.throws(() => context.applyBureauResolutions_(s.preflight, additions, 'synthetic'),
+    error => error.code === 'E_BUREAU_RESOLUTION_OUTPUT_AMBIGUOUS');
+  assert.equal(s.sheets[context.APP_CONFIG.sheets.bureauResolutions], undefined);
+  assert.equal(JSON.stringify(output.values), before);
+});
+
+test('1件の掲載回答も識別子で管理でき、原本変更・新たな同名回答では承認を再確認する', () => {
+  const s = makeSeparatePublicationScenario();
+  const second = s.publicationBatch.values.pop();
+  s.preflight.bureauOutputs[0].values.pop();
+  s.preflight.bureauOutputs[0].sheet.grid.pop();
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.publicationKeys[0]], '別掲載情報');
+  context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  s.publicationBatch.values.push(second);
+  const next = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  const delta = context.planBureauDelta_(s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid })),
+    next.records.filter(record => context.isOtherPublicationRecord_(record)));
+  assert.equal(delta.appends.length, 0);
+  assert.equal(delta.reviews.filter(review => s.publicationKeys.includes(review.reviewKey)).length, 2);
+  s.publicationBatch.values.pop();
+  const textColumn = s.publicationBatch.values[0].indexOf('掲載文字情報');
+  s.publicationBatch.values[1][textColumn] = '原本の変更';
+  const stale = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  assert.equal(stale.records.find(record => context.isOtherPublicationRecord_(record)).separateProject, false);
+  const staleDelta = context.planBureauDelta_(s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid })),
+    stale.records.filter(record => context.isOtherPublicationRecord_(record)));
+  assert.equal(staleDelta.appends.length + staleDelta.updates.length + staleDelta.deletes.length, 0);
+  assert.ok(stale.issues.some(issue => issue.code === 'E_BUREAU_RESOLUTION_STALE'));
 });
 
 test('局別回答除外はその他掲載情報だけに適用し通常企画には適用しない', () => {
