@@ -4,6 +4,8 @@
 
 ## 境界
 
+通常回答の同名別企画と書式不備の変更申請には、非表示の`26局別確認結果`へ明示的な確認結果を保存する。原本の同期対象フィールドをSHA-256で照合し、内容変更時は過去の承認を適用しない。別企画登録済みの局は表示18列の末尾へ非表示の`同期回答識別子`を追加する。初回だけ既存内容の完全一致で回答と出力を結び付け、以後は識別子で手動列を引き継ぐ。登録、対象企画の差分反映、出力再読込、対応済み更新の順で実行する。途中失敗は通常同期からも再試行可能。既存の変更申請検証、マスター、その他掲載情報の重複判定は変更しない。
+
 システムはGoogle Sheetsとcontainer-bound Apps Scriptだけで構成する。外部DB、Cloud Run、FastAPI、OpenAI API、外部秘密管理、外部URLアクセス、Webアプリ公開は使わない。Apps Script本体にnpm runtime依存はなく、npmはローカル検証と`clasp`操作だけに使う。
 
 stagingとproductionは、スプレッドシートもApps Script projectも完全に別である。各scriptはScript Propertiesの`EXPECTED_SPREADSHEET_ID`と実際のバウンド先IDを毎回照合する。`APP_ENV`が`staging`または`production`以外でも停止する。

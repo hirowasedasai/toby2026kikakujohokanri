@@ -17,6 +17,8 @@ function onOpen() {
     .addSeparator()
     .addItem('要手動確認を開く', 'openManualReview')
     .addItem('その他掲載情報: 選択した回答を採用', 'adoptSelectedOtherPublicationResponse')
+    .addItem('通常企画: 選択した同名回答を別企画として登録', 'registerSelectedSeparateProjects')
+    .addItem('変更申請: 選択行の書式を補正して反映', 'registerSelectedChangeCorrection')
     .addItem('処理ログを開く', 'openProcessLog')
     .addItem('環境情報を表示', 'showEnvironmentInfo')
     .addToUi();

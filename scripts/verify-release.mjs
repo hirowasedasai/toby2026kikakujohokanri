@@ -18,6 +18,7 @@ const requiredFiles = [
   'apps-script/buildOutputs.gs',
   'apps-script/buildBureauOutputs.gs',
   'apps-script/bureauResponseSelection.gs',
+  'apps-script/bureauResolutions.gs',
   'apps-script/resize.gs',
   'apps-script/image_resize.gs.gs',
   'apps-script/validation.gs',

@@ -36,6 +36,7 @@ var APP_CONFIG = Object.freeze({
     participantOutput: '参参一覧',
     participantExclusions: '26参参除外管理',
     bureauExclusions: '26局別回答除外管理',
+    bureauResolutions: '26局別確認結果',
     foodOutput: '屋台情報まとめ',
     bureauOutputs: Object.freeze([
       Object.freeze({ bureau: '会場整備局', name: '26会場整備局' }),
@@ -195,6 +196,10 @@ var APP_CONFIG = Object.freeze({
     '修正必要'
   ]),
   bureauOtherPublicationSourceType: 'STAFF_OTHER_PUBLICATION',
+  bureauResponseIdHeader: '同期回答識別子',
+  bureauResolutionHeaders: Object.freeze([
+    '入力識別子', '処理区分', '原本照合値', '補正変更前', '補正変更後', '記録日時'
+  ]),
   bureauProjectInformationSectionLabel: '企画情報',
   bureauOtherPublicationSectionLabel: 'その他掲載情報',
   bureauOtherPublicationSectionBackground: '#5b73b7',

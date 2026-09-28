@@ -143,6 +143,9 @@ function guestSummary_(record) {
 }
 
 function bureauOutputValueByHeader_(record, header) {
+  if (normalizeHeader_(header) === normalizeHeader_(APP_CONFIG.bureauResponseIdHeader)) {
+    return isOtherPublicationRecord_(record) ? '' : bureauResponseId_(record);
+  }
   var values = {
     '企画名': record.projectName,
     '企画紹介文': record.introduction,
@@ -359,7 +362,7 @@ function evaluateStaffChange_(change, projectIndex) {
   return { applied: true, code: '', reason: '', target: target };
 }
 
-function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseIds) {
+function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseIds, resolutions) {
   var rowsByBureau = {};
   APP_CONFIG.sheets.bureauOutputs.forEach(function (output) {
     rowsByBureau[output.bureau] = [];
@@ -406,10 +409,32 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
   });
 
   var appliedChanges = 0;
+  var resolvedChanges = {};
+  baseRecords.forEach(function (record) {
+    var resolution = resolutions && resolutions[bureauResponseId_(record)];
+    record.separateProject = Boolean(record.sourceType === 'STAFF_FORM' && resolution &&
+      resolution.kind === '別企画' && resolution.fingerprint === bureauSourceFingerprint_(record));
+  });
   changeRecords.forEach(function (change) {
+    var resolution = resolutions && resolutions[bureauResponseId_(change)];
+    if (resolution && resolution.kind === '変更補正') {
+      if (resolution.fingerprint !== bureauSourceFingerprint_(change)) {
+        skipped += 1;
+        reviews.push(manualReviewFromChange_(change, '補正登録後に原本が変わったため再確認が必要です。'));
+        issues.push(makeChangeReviewIssue_(change, 'E_BUREAU_RESOLUTION_STALE',
+          '補正登録後に原本が変わったため再確認が必要です。'));
+        return;
+      }
+      change.beforeChange = resolution.before;
+      change.afterChange = resolution.after;
+    }
     var result = evaluateStaffChange_(change, projectIndex);
     if (result.applied) {
       appliedChanges += 1;
+      if (resolution && resolution.kind === '変更補正') {
+        result.target.changeStatus = '確認済み補正を反映';
+        resolvedChanges[bureauResponseId_(change)] = bureauResponseId_(result.target);
+      }
       return;
     }
     skipped += 1;
@@ -434,6 +459,7 @@ function buildBureauOutputPlan_(inputBatches, headersByBureau, excludedResponseI
     issues: issues,
     skipped: skipped,
     appliedChanges: appliedChanges,
+    resolvedChanges: resolvedChanges,
     records: baseRecords,
     sourceRowCount: baseRecords.length + changeRecords.length
   };
@@ -814,6 +840,7 @@ function existingBureauEntries_(bureauOutputs) {
         row: row,
         rowNumber: offset + 2,
         projectKey: normalizeProjectNameKey_(row[projectColumn]),
+        responseId: normalizeText_(row[index[normalizeHeader_(APP_CONFIG.bureauResponseIdHeader)]]),
         group: group
       });
     });
@@ -832,6 +859,7 @@ function uniqueEntries_(entries) {
 
 function planBureauDelta_(bureauOutputs, records) {
   var existing = existingBureauEntries_(bureauOutputs);
+  var separateMatches = separateBureauMatches_(existing, records);
   var existingByKey = {};
   existing.forEach(function (entry) {
     var entryKey = bureauEntryKey_(entry.group, entry.projectKey);
@@ -870,7 +898,8 @@ function planBureauDelta_(bureauOutputs, records) {
     var finalKey = normalizeProjectNameKey_(record.projectName);
     var group = bureauRecordGroup_(record);
     var finalEntryKey = bureauEntryKey_(group, finalKey);
-    if (!finalKey || desiredCounts[finalEntryKey] > 1) {
+    var separate = separateMatches[bureauResponseId_(record)];
+    if (!finalKey || (desiredCounts[finalEntryKey] > 1 && !separate)) {
       var sourceReason = !finalKey
         ? '企画名が空欄のため局別タブへ追加できません。'
         : '同じ掲載区分と企画名の回答が複数あるため差分更新しません。';
@@ -889,8 +918,18 @@ function planBureauDelta_(bureauOutputs, records) {
     var candidates = uniqueEntries_(matchKeys.reduce(function (matches, key) {
       return matches.concat(existingByKey[bureauEntryKey_(group, key)] || []);
     }, [])).filter(function (entry) {
-      return !consumed[entry.id];
+      return !consumed[entry.id] && (!entry.responseId || entry.responseId === bureauResponseId_(record));
     });
+    if (separate) candidates = separate.candidates;
+    if (separate && separate.blocked) {
+      var separateReason = '別企画の既存行を一意に照合できません。同期回答識別子と既存内容を確認してください。';
+      delta.skipped += 1;
+      delta.reviews.push(manualReviewFromRecord_(record, separateReason));
+      delta.issues.push(makeIssue_('WARN', 'E_BUREAU_SEPARATE_AMBIGUOUS', separateReason, {
+        sourceSheet: record.sourceSheet, rowNumber: record.rowNumber, columnName: '企画名'
+      }));
+      return;
+    }
     if (candidates.length > 1) {
       var existingReason = '企画名に一致する局別タブの既存行が複数あるため差分更新しません。';
       delta.skipped += 1;
@@ -1123,7 +1162,9 @@ function applyBureauDelta_(delta) {
         .getRange(append.source.rowNumber, 1, 1, sourceHeaders.length)
         .getValues()[0];
       var sourceProjectColumn = buildHeaderIndex_(sourceHeaders)[normalizeHeader_('企画名')];
-      if (normalizeProjectNameKey_(latestSourceRow[sourceProjectColumn]) !== append.source.projectKey) {
+      var sourceIdColumn = buildHeaderIndex_(sourceHeaders)[normalizeHeader_(APP_CONFIG.bureauResponseIdHeader)];
+      if (normalizeProjectNameKey_(latestSourceRow[sourceProjectColumn]) !== append.source.projectKey ||
+        (append.source.responseId && normalizeText_(latestSourceRow[sourceIdColumn]) !== append.source.responseId)) {
         var beforeMoveReason = '所属局移動前に移動元行が変わったため、この企画だけをスキップしました。';
         delta.updated = Math.max(delta.updated - 1, 0);
         delta.skipped += 1;
@@ -1159,7 +1200,8 @@ function applyBureauDelta_(delta) {
     var moveRecord = approvedMoveSources[entry.id];
     if (!moveRecord) return;
     var candidates = liveBureauEntriesForOutput_(entry.output).filter(function (candidate) {
-      return candidate.group === entry.group && candidate.projectKey === entry.projectKey;
+      return candidate.group === entry.group && candidate.projectKey === entry.projectKey &&
+        (!entry.responseId || candidate.responseId === entry.responseId);
     });
     if (candidates.length !== 1) {
       var afterMoveReason = '所属局移動後に削除対象行を一意に確認できないため、移動元を削除せず保持しました。';
@@ -1345,17 +1387,22 @@ function performBuildBureauOutputs_(suppliedPreflight, executionId) {
   });
   var bureauOutputs = preflight.bureauOutputs || prepareBureauOutputSheets_(preflight.spreadsheet);
   var manualReview = preflight.manualReview || prepareManualReviewSheet_(preflight.spreadsheet);
+  var resolutions = bureauResolutionSet_(preflight.spreadsheet);
   var headersByBureau = {};
   bureauOutputs.forEach(function (output) {
     headersByBureau[output.bureau] = output.values[0];
   });
   var plan = buildBureauOutputPlan_(preflight.inputs, headersByBureau,
-    bureauResponseExclusionSet_(preflight.spreadsheet));
+    bureauResponseExclusionSet_(preflight.spreadsheet), resolutions);
+  bureauOutputs = ensureBureauResponseIdColumns_(bureauOutputs, plan.records);
   var delta = planBureauDelta_(bureauOutputs, plan.records);
   applyBureauDelta_(delta);
   var allReviews = plan.reviews.concat(delta.reviews);
   var issues = plan.issues.concat(delta.issues);
   var pendingReviews = syncManualReviewData_(manualReview, allReviews, bureauOutputs, issues);
+  if (Object.keys(resolutions).length) {
+    pendingReviews = completeBureauResolutions_(manualReview.sheet, plan, bureauOutputs, allReviews, issues);
+  }
   var summary = {
     created: delta.created,
     updated: delta.updated,

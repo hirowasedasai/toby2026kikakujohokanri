@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -22,6 +23,11 @@ const context = vm.createContext({
   RegExp,
   Error,
   Utilities: {
+    DigestAlgorithm: { SHA_256: 'sha256' },
+    Charset: { UTF_8: 'utf8' },
+    computeDigest(algorithm, value, charset) {
+      return [...createHash(algorithm).update(value, charset).digest()];
+    },
     formatDate(value) {
       return new Date(value).toISOString();
     },
@@ -40,6 +46,7 @@ for (const file of [
   'buildOutputs.gs',
   'buildBureauOutputs.gs',
   'bureauResponseSelection.gs',
+  'bureauResolutions.gs',
   'setup.gs'
 ]) {
   const source = await readFile(path.join(repoRoot, 'apps-script', file), 'utf8');
@@ -1283,6 +1290,225 @@ test('その他掲載情報の採用は対象外・除外済み・原本不一�
     `${inputs[0].source.name}:2`, {}), error => error.code === 'E_BUREAU_ADOPTION_NOT_DUPLICATE');
   assert.throws(() => context.validateAdoptionReview_({ projectName: '別の合成企画' }, adoption.selected),
     error => error.code === 'E_BUREAU_ADOPTION_SELECTION_STALE');
+});
+
+function makeBureauResolutionScenario() {
+  const source = type => context.APP_CONFIG.sheets.inputs.find(item => item.type === type);
+  const form = source('STAFF_FORM');
+  const change = source('STAFF_CHANGE');
+  const headers = ['タイムスタンプ', '所属局', '部署名', '担当者名', '企画名', '企画紹介文（75字以内）', 'ゲスト名'];
+  const inputs = [
+    { source: form, values: [headers,
+      ['T1', '企画局', '合成部署', '合成担当', '合成同名企画', '紹介A', '講師A'],
+      ['T2', '企画局', '合成部署', '合成担当', '合成同名企画', '紹介B', '講師B'],
+      ['T3', '渉外局', '合成部署', '合成担当', '合成変更企画', '紹介C', '']] },
+    { source: change, values: [['タイムスタンプ', '所属局', '部署名', '担当者名', '企画名', '変更前', '変更後'],
+      ['T4', '渉外局', '合成部署', '合成担当', '合成変更企画', '「合成変更企画」', '「合成変更企画・新」']] }
+  ];
+  const sheets = {};
+  function addSheet(name, values) {
+    const sheet = makeGridSheet(values);
+    sheet.getName = () => name;
+    sheet.getMaxColumns = () => 30;
+    sheet.hideColumns = column => { sheet.hiddenColumn = column; };
+    sheet.hideSheet = () => { sheet.hidden = true; };
+    sheet.deleteRow = row => sheet.grid.splice(row - 1, 1);
+    const getRange = sheet.getRange.bind(sheet);
+    sheet.getRange = (...args) => {
+      const range = getRange(...args);
+      range.setValue = value => range.setValues([[value]]);
+      return range;
+    };
+    sheets[name] = sheet;
+    return sheet;
+  }
+  const plan = context.buildBureauOutputPlan_(inputs);
+  const outputHeaders = plain(context.APP_CONFIG.bureauOutputHeaders);
+  const outputs = ['企画局', '渉外局'].map(bureau => {
+    const record = plan.records.find(item => item.bureau === bureau);
+    const row = plain(context.mergeBureauRecordWithManualRow_(record, null, null, outputHeaders));
+    row[outputHeaders.indexOf('掲載文字情報')] = '校閲済み本文';
+    row[outputHeaders.indexOf('当媒チェック')] = '確認済み';
+    const sheet = addSheet(`26${bureau}`, [outputHeaders.slice(),
+      plain(context.bureauSectionRow_(outputHeaders, context.APP_CONFIG.bureauProjectInformationSectionLabel)),
+      row, plain(context.bureauOtherPublicationSeparatorRow_(outputHeaders))]);
+    return { bureau, sheet, values: sheet.grid.map(item => item.slice()) };
+  });
+  const reviewHeaders = plain(context.APP_CONFIG.manualReviewHeaders);
+  const reviews = [context.manualReviewFromRecord_(plan.records[0], '重複'),
+    context.manualReviewFromRecord_(plan.records[1], '重複'), ...plain(plan.reviews)];
+  const reviewSheet = addSheet(context.APP_CONFIG.sheets.manualReview, [reviewHeaders,
+    ...reviews.map(review => reviewHeaders.map(header => context.manualReviewValueByHeader_(review, header, {})))]);
+  const logSheet = addSheet(context.APP_CONFIG.sheets.log, [plain(context.APP_CONFIG.logHeaders)]);
+  const spreadsheet = { getSheetByName: name => sheets[name] || null, insertSheet: name => addSheet(name, []) };
+  const preflight = { spreadsheet, inputs, bureauOutputs: outputs, manualReview: { sheet: reviewSheet },
+    settings: { environment: 'staging', releaseId: 'synthetic' }, log: { sheet: logSheet, values: logSheet.grid } };
+  const keys = [`${form.name}:2`, `${form.name}:3`];
+  return { preflight, inputs, sheets, reviewSheet, logSheet, keys, changeKey: `${change.name}:2` };
+}
+
+test('明示登録した同名通常回答を別企画として追加し、手動列・原本・再同期時の対応を保持する', () => {
+  const s = makeBureauResolutionScenario();
+  const original = JSON.stringify(s.inputs);
+  const additions = context.proposeBureauResolutions_(s.inputs, s.keys, '別企画');
+  const result = context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  assert.equal(result.created, 1);
+  assert.equal(result.needsReview, 1);
+  const output = s.preflight.bureauOutputs[0];
+  const idIndex = output.sheet.grid[0].indexOf(context.APP_CONFIG.bureauResponseIdHeader);
+  const rows = output.sheet.grid.filter(row => s.keys.includes(row[idIndex]));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0][output.sheet.grid[0].indexOf('掲載文字情報')], '校閲済み本文');
+  assert.equal(rows[0][output.sheet.grid[0].indexOf('当媒チェック')], '確認済み');
+  assert.equal(rows[1][output.sheet.grid[0].indexOf('企画紹介文')], '紹介B');
+  assert.equal(output.sheet.hiddenColumn, idIndex + 1);
+  assert.equal(JSON.stringify(s.inputs), original);
+  const ledger = s.sheets[context.APP_CONFIG.sheets.bureauResolutions];
+  assert.ok(!JSON.stringify(ledger.grid).includes('合成担当'));
+  assert.ok(!JSON.stringify(s.logSheet.grid).includes('合成担当'));
+  const next = context.buildBureauOutputPlan_(s.inputs, null, {}, context.bureauResolutionSet_(s.preflight.spreadsheet));
+  const live = s.preflight.bureauOutputs.map(item => ({ ...item, values: item.sheet.grid }));
+  const delta = context.planBureauDelta_(live, next.records);
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+  assert.equal(delta.reviews.length, 0);
+});
+
+test('同名の未選択回答・原本の変更・新しい回答は別企画の承認を引き継がない', () => {
+  const s = makeBureauResolutionScenario();
+  assert.throws(() => context.proposeBureauResolutions_(s.inputs, [s.keys[0]], '別企画'),
+    error => error.code === 'E_BUREAU_RESOLUTION_GROUP');
+  const additions = context.proposeBureauResolutions_(s.inputs, s.keys, '別企画');
+  s.inputs[0].values[2][5] = '再確認が必要な原本変更';
+  let plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  let delta = context.planBureauDelta_(s.preflight.bureauOutputs, plan.records);
+  assert.equal(delta.reviews.filter(review => s.keys.includes(review.reviewKey)).length, 2);
+  s.inputs[0].values[2][5] = '紹介B';
+  s.inputs[0].values.push(['T5', '企画局', '合成部署', '合成担当', '合成同名企画', '紹介D', '講師D']);
+  plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  delta = context.planBureauDelta_(s.preflight.bureauOutputs, plan.records);
+  assert.equal(delta.reviews.filter(review => review.projectName === '合成同名企画').length, 3);
+  assert.equal(delta.appends.length, 0);
+});
+
+test('同名既存行を一意に特定できなければ確認結果登録前に停止する', () => {
+  const s = makeBureauResolutionScenario();
+  const output = s.preflight.bureauOutputs[0];
+  output.values[2][output.values[0].indexOf('ゲスト情報')] = '一致しない手動内容';
+  const additions = context.proposeBureauResolutions_(s.inputs, s.keys, '別企画');
+  assert.throws(() => context.applyBureauResolutions_(s.preflight, additions, 'synthetic'),
+    error => error.code === 'E_BUREAU_RESOLUTION_OUTPUT_AMBIGUOUS');
+  assert.equal(s.sheets[context.APP_CONFIG.sheets.bureauResolutions], undefined);
+});
+
+test('別企画の識別子は列順と行順によらず手動内容を正しい回答へ保持する', () => {
+  const s = makeBureauResolutionScenario();
+  const additions = context.proposeBureauResolutions_(s.inputs, s.keys, '別企画');
+  context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  const next = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  const output = s.preflight.bureauOutputs[0];
+  const idColumn = output.sheet.grid[0].indexOf(context.APP_CONFIG.bureauResponseIdHeader);
+  const first = output.sheet.grid.find(row => row[idColumn] === s.keys[0]);
+  const second = output.sheet.grid.find(row => row[idColumn] === s.keys[1]);
+  second[output.sheet.grid[0].indexOf('掲載文字情報')] = '別企画Bの校閲文';
+  const reversed = { ...output, values: [output.sheet.grid[0].slice().reverse(), second.slice().reverse(), first.slice().reverse()] };
+  const delta = context.planBureauDelta_([reversed], next.records.filter(record => record.bureau === '企画局'));
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+  assert.equal(delta.reviews.length, 0);
+});
+
+test('書式補正は通常の完全一致検証を通して名称を反映し原本・校閲本文を保持する', () => {
+  const s = makeBureauResolutionScenario();
+  const original = JSON.stringify(s.inputs);
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正',
+    '企画名：「合成変更企画」', '企画名：「合成変更企画・新」');
+  const result = context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  assert.equal(result.needsReview, 2);
+  const sheet = s.preflight.bureauOutputs[1].sheet;
+  const headers = sheet.grid[0];
+  const row = sheet.grid.find(item => item[headers.indexOf('企画名')] === '合成変更企画・新');
+  assert.ok(row);
+  assert.equal(row[headers.indexOf('掲載文字情報')], '校閲済み本文');
+  assert.equal(row[headers.indexOf('変更反映状況')], '確認済み補正を反映');
+  assert.equal(JSON.stringify(s.inputs), original);
+  const next = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  const live = s.preflight.bureauOutputs.map(item => ({ ...item, values: item.sheet.grid }));
+  const delta = context.planBureauDelta_(live, next.records);
+  assert.equal(delta.appends.length + delta.updates.length + delta.deletes.length, 0);
+  assert.equal(next.reviews.length, 0);
+});
+
+test('補正変更前の不一致・画像・未対応項目・原本変更は上書きや完了扱いをしない', () => {
+  for (const [before, after] of [['企画名：「誤った現在値」', '企画名：「新名称」'],
+    ['掲載文字情報：「本文」', '掲載文字情報：「新本文」']]) {
+    const s = makeBureauResolutionScenario();
+    assert.throws(() => {
+      const additions = context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正', before, after);
+      context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+    });
+    assert.equal(s.sheets[context.APP_CONFIG.sheets.bureauResolutions], undefined);
+    assert.equal(context.pendingManualReviewCountFromValues_(s.reviewSheet.grid), 3);
+  }
+  const s = makeBureauResolutionScenario();
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正',
+    '企画名：「合成変更企画」', '企画名：「合成変更企画・新」');
+  s.inputs[1].values[1][6] = '原本が変更された';
+  const plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  assert.equal(plan.appliedChanges, 0);
+  assert.equal(plan.issues[0].code, 'E_BUREAU_RESOLUTION_STALE');
+  assert.equal(plan.records[2].projectName, '合成変更企画');
+  const imageScenario = makeBureauResolutionScenario();
+  imageScenario.inputs[1].values[0].push('変更後（画像の場合はこちらに提出してください）');
+  imageScenario.inputs[1].values[1].push('synthetic-image');
+  const imageResolution = context.proposeBureauResolutions_(imageScenario.inputs, [imageScenario.changeKey], '変更補正',
+    '企画名：「合成変更企画」', '企画名：「合成変更企画・新」');
+  assert.throws(() => context.applyBureauResolutions_(imageScenario.preflight, imageResolution, 'synthetic'),
+    error => error.code === 'E_BUREAU_RESOLUTION_NOT_APPLIED');
+});
+
+test('確認結果の完了更新で1行失敗しても後続行を継続しPIIのないエラーを返す', () => {
+  const s = makeBureauResolutionScenario();
+  const additions = context.proposeBureauResolutions_(s.inputs, s.keys, '別企画');
+  context.applyBureauResolutions_(s.preflight, additions, 'synthetic');
+  const statusColumn = s.reviewSheet.grid[0].indexOf('対応状況');
+  s.reviewSheet.grid[1][statusColumn] = '未対応';
+  s.reviewSheet.grid[2][statusColumn] = '未対応';
+  const original = s.reviewSheet.getRange;
+  s.reviewSheet.getRange = (...args) => {
+    const range = original(...args);
+    if (args[0] === 2 && args[1] === statusColumn + 1) range.setValues = () => { throw new Error('合成担当 private'); };
+    return range;
+  };
+  const plan = context.buildBureauOutputPlan_(s.inputs, null, {}, additions);
+  const issues = [];
+  const pending = context.completeBureauResolutions_(s.reviewSheet, plan, s.preflight.bureauOutputs, plan.reviews, issues);
+  assert.equal(pending, 2);
+  assert.equal(s.reviewSheet.grid[1][statusColumn], '未対応');
+  assert.equal(s.reviewSheet.grid[2][statusColumn], '対応済み');
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].code, 'E_BUREAU_RESOLUTION_STATUS_FAILED');
+  assert.ok(!JSON.stringify(issues).includes('合成担当'));
+});
+
+test('確認結果保存後に出力が失敗した場合は未対応を残し、通常同期で再試行できる', () => {
+  const s = makeBureauResolutionScenario();
+  const additions = context.proposeBureauResolutions_(s.inputs, [s.changeKey], '変更補正',
+    '企画名：「合成変更企画」', '企画名：「合成変更企画・新」');
+  const sheet = s.preflight.bureauOutputs[1].sheet;
+  const original = sheet.getRange;
+  sheet.getRange = (...args) => {
+    const range = original(...args);
+    range.setValues = () => { throw new Error('synthetic write failure'); };
+    return range;
+  };
+  assert.throws(() => context.applyBureauResolutions_(s.preflight, additions, 'synthetic'), /synthetic write failure/);
+  assert.equal(context.pendingManualReviewCountFromValues_(s.reviewSheet.grid), 3);
+  assert.ok(s.sheets[context.APP_CONFIG.sheets.bureauResolutions]);
+  sheet.getRange = original;
+  const result = context.performBuildBureauOutputs_(s.preflight, 'retry');
+  assert.equal(result.needsReview, 2);
+  const second = context.performBuildBureauOutputs_({ ...s.preflight,
+    bureauOutputs: s.preflight.bureauOutputs.map(output => ({ ...output, values: output.sheet.grid })) }, 'again');
+  assert.equal(second.created + second.updated, 0);
 });
 
 test('局別回答除外はその他掲載情報だけに適用し通常企画には適用しない', () => {
